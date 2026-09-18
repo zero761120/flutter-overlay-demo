@@ -151,7 +151,11 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
             }
         } else if (call.method.equals("performGlobalAction")) {
             Integer actionId = call.argument("action");
-            if (Utils.isAccessibilitySettingsOn(context)) {
+            // LOCAL PATCH: upstream only checked the settings flag, so this returned true even
+            // when the service was listed-but-not-connected — the caller then had no way to
+            // tell a performed action from a dropped one. dispatchGesture already guards on
+            // the bound instance; do the same here.
+            if (Utils.isAccessibilitySettingsOn(context) && AccessibilityListener.isConnected()) {
                 final Intent i = new Intent(context, AccessibilityListener.class);
                 i.putExtra(INTENT_GLOBAL_ACTION, true);
                 i.putExtra(INTENT_GLOBAL_ACTION_ID, actionId);

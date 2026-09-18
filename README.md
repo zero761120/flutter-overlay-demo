@@ -70,6 +70,10 @@ surface / 合成器那層，Dart 這側碰不到。
 - `resizeOverlay` 的高度沒有 MATCH_PARENT sentinel（外掛判斷式恆真），只能餵實際 dp
 - 視窗對齊用 `topLeft`；置中對齊會以「扣掉系統列的 parent frame」為基準，與 `display.size` 差一個 inset
 - `closeOverlay` 不會重建 isolate（引擎是快取的），`initState` 不會重跑
+- `closeOverlay` 也**不會給懸浮層的 Dart 側任何訊號**——它只拆原生 View。所以那邊的
+  timer 必須自己確認 `isActive()`，否則視窗關了它還在跑，而且使用者已經按不到停止鍵
+- `performGlobalAction` 只檢查「設定頁是否啟用」、不檢查「是否真的連上」，而且無條件
+  回 `true`（已在 vendor 版補上連線檢查）
 - 原生 `onStartCommand` 最後還會 `moveOverlay` 一次，會蓋掉 Dart 這側擺的位置
 - `positionGravity != none` 時，**連單純點一下**也會排一個吸附動畫 timer，跟程式化移動搶 LayoutParams
 - `dispatchGesture` 的座標是實體像素，不是 dp

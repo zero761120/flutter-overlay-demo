@@ -556,6 +556,13 @@ class _FloatingBallState extends State<FloatingBall>
     _clickTimer?.cancel();
     _clickError = null;
     _clickTimer = Timer.periodic(kClickInterval, (Timer t) async {
+      // 主 App 按「關閉懸浮球」走的是 stopService，只拆掉原生的 View；懸浮層的 isolate
+      // 與引擎都留在快取裡，這個 timer 不會收到任何訊號。不自己檢查的話，視窗沒了、
+      // 「停止連點」也按不到，它卻還在每 300ms 戳螢幕。
+      if (!await FlutterOverlayWindow.isActive()) {
+        t.cancel();
+        return;
+      }
       // 面板展開時整個螢幕都是我們的視窗，這時候派手勢只會戳到自己，先跳過。
       if (_mode != _BallMode.idle) return;
       final bool ok = await FlutterAccessibilityService.dispatchGesture(tap);
@@ -604,13 +611,21 @@ class _FloatingBallState extends State<FloatingBall>
   }
 
   Future<void> _takeScreenshot() async {
-    _report(_l10n.screenshot);
+    final String label = _l10n.screenshot;
+    final String failed = _l10n.dispatchFailed;
     // 系統截圖會把我們的懸浮層一起拍進去，先收合再拍。
     await _collapse();
     await Future<void>.delayed(const Duration(milliseconds: 300));
-    await FlutterAccessibilityService.performGlobalAction(
+    final bool ok = await FlutterAccessibilityService.performGlobalAction(
       GlobalAction.globalActionTakeScreenshot,
     );
+    // 確定成功才記錄。無條件記一筆的話，「服務其實沒連上」會留下一筆看起來成功的紀錄，
+    // 那比沒有紀錄更糟。
+    if (!ok) {
+      if (mounted) setState(() => _clickError = failed);
+      return;
+    }
+    _report(label);
   }
 
   // ── 展開 / 收合 ──

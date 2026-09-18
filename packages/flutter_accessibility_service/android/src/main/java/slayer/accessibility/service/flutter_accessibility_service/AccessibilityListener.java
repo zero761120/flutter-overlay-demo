@@ -46,6 +46,13 @@ import io.flutter.embedding.engine.FlutterEngineCache;
 
 public class AccessibilityListener extends AccessibilityService {
     private static AccessibilityListener instance;
+
+    /// LOCAL PATCH: "enabled in settings" and "actually bound" are different things — the
+    /// service can be listed as enabled while onServiceConnected never completed. Callers
+    /// need to tell those apart, otherwise a failed action looks like a successful one.
+    static boolean isConnected() {
+        return instance != null;
+    }
     private static WindowManager mWindowManager;
     private static FlutterView mOverlayView;
     static private boolean isOverlayShown = false;

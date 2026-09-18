@@ -79,6 +79,11 @@ a full screen width. Item 3 evens them out.
 - Align the window with `topLeft`; centered gravity measures against the parent frame with the
   system bars removed, which differs from `display.size` by one inset
 - `closeOverlay` does not rebuild the isolate (the engine is cached), so `initState` never re-runs
+- `closeOverlay` also gives the overlay's Dart side **no signal at all** — it only tears down the
+  native view. Timers there must check `isActive()` themselves, or they keep running after the
+  window is gone, with the stop button no longer reachable
+- `performGlobalAction` only checks "enabled in settings", not "actually bound", and returns
+  `true` unconditionally (the vendored copy adds the connected check)
 - Native `onStartCommand` calls `moveOverlay` once more at the end, overwriting the position set
   from the Dart side
 - With `positionGravity != none`, **even a plain tap** schedules a snap-animation timer that
