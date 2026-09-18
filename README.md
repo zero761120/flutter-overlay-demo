@@ -1,5 +1,7 @@
 # flutter-overlay-demo
 
+**繁體中文** · [English](README.en.md)
+
 Android 懸浮球（類 AssistiveTouch）的 Flutter 實作驗證。個人自用，非產品。
 
 球可拖曳、吸附邊緣（可開關），點一下展開選單。選單提供：設定連點目標、開始／停止連點
