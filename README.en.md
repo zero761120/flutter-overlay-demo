@@ -25,6 +25,25 @@ fvm flutter pub get
 fvm flutter build apk --debug
 ```
 
+## Before you use it
+
+This tool requests two high-privilege permissions (overlay window, accessibility service) and
+can simulate touches and capture the screen. Those capabilities are official Android APIs and
+neutral in themselves, but **how they are used is the user's responsibility**: on your own
+device and your own accounts there is no issue; using them to interfere with someone else's
+system, to bypass protection measures, or in breach of a service's terms of use is on you.
+
+The author accepts no liability for how it is used (see `LICENSE`).
+
+## License
+
+This project is MIT (see `LICENSE`).
+
+The two packages under `packages/` are **modified copies** of third-party code, originally by
+Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Every change is
+marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
+Both fixes address genuine upstream defects that have not yet been reported upstream.
+
 ## Locally patched third-party packages
 
 Two packages are vendored with a fix (`packages/`, wired through `dependency_overrides`).
