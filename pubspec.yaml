@@ -36,6 +36,10 @@ dependencies:
   cupertino_icons: 1.0.8
   flutter_overlay_window: 0.5.0
   flutter_accessibility_service: 1.2.0
+  android_intent_plus: 6.1.0
+  flutter_localizations:
+    sdk: flutter
+  intl: any
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +62,7 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  generate: true
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -96,3 +101,8 @@ flutter:
 dependency_overrides:
   flutter_accessibility_service:
     path: packages/flutter_accessibility_service
+  # 本地修正版：上游把靜態的 WindowSetup.messenger 設在 onAttachedToEngine，而外掛在主
+  # 引擎與懸浮窗引擎各註冊一次、後者覆蓋前者，導致懸浮層的 shareData() 繞回自己、主 App
+  # 永遠收不到。改成在 onAttachedToActivity 指派（只有主引擎會有 Activity）。
+  flutter_overlay_window:
+    path: packages/flutter_overlay_window

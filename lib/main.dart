@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_accessibility_service/constants.dart';
 import 'package:flutter_accessibility_service/flutter_accessibility_service.dart';
 import 'package:flutter_accessibility_service/gesture_description.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:overlay_demo/l10n/app_localizations.dart';
 
 /// 懸浮球收合後的邊長（dp）。
 ///
@@ -27,7 +30,47 @@ const Duration kClickInterval = Duration(milliseconds: 300);
 /// LayoutParams 在 1ms 內就是最終值，但畫面上的視窗要約 283ms 才追到位——搬移發生在
 /// surface / 合成器那層，Dart 這側碰不到。與其讓球「飄過去」，不如等 surface 追得
 /// 差不多了再顯示，變成乾脆的消失再出現。
-const Duration kCollapseRevealDelay = Duration(milliseconds: 180);
+///
+/// 值是量出來的：180ms 時揭露，球還差 70px 沒追完（肉眼是「小小飄回定位」），
+/// 而 surface 的收斂率約每幀 0.7，再給 ~7 幀就進到個位數像素。
+const Duration kCollapseRevealDelay = Duration(milliseconds: 300);
+
+/// 展開後延遲多久才把面板畫出來。同上，遮蔽 surface 的追趕。
+///
+/// 展開一律把視窗變成「全螢幕、錨在 (0,0)」。球在左緣時 x 本來就是 0、surface 只需
+/// 長大；球在右緣時還得橫移將近一個螢幕寬，追趕距離差很多——這就是左右兩側手感不同的
+/// 原因。用同一段延遲把兩邊拉齊。
+const Duration kExpandRevealDelay = Duration(milliseconds: 200);
+
+/// 一套慣用的藍色主題。
+/// 主色日夜同色，底色與文字分日夜。這裡只搬懸浮球 demo 用得到的那幾個。
+abstract final class BlueSkin {
+  static const Color main = Color(0xFF2278FF);
+  static const Color lightBg1 = Color(0xFFFFFFFF);
+  static const Color lightBg2 = Color(0xFFF7F7F7);
+  static const Color lightText1 = Color(0xFF000000);
+  static const Color lightText3 = Color(0xFF6880A3);
+  static const Color darkBg1 = Color(0xFF081F2D);
+  static const Color darkText1 = Color(0xFFFFFFFF);
+  static const Color darkText3 = Color(0xFF7DA1B4);
+}
+
+ThemeData buildTheme(Brightness brightness) {
+  final bool dark = brightness == Brightness.dark;
+  return ThemeData(
+    useMaterial3: true,
+    brightness: brightness,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: BlueSkin.main,
+      brightness: brightness,
+      primary: BlueSkin.main,
+      surface: dark ? BlueSkin.darkBg1 : BlueSkin.lightBg1,
+      onSurface: dark ? BlueSkin.darkText1 : BlueSkin.lightText1,
+      onSurfaceVariant: dark ? BlueSkin.darkText3 : BlueSkin.lightText3,
+    ),
+    scaffoldBackgroundColor: dark ? BlueSkin.darkBg1 : BlueSkin.lightBg2,
+  );
+}
 
 /// 螢幕尺寸（dp）。兩個 isolate 都從同一個來源推導，否則主 App 給的初始座標會跟
 /// 懸浮窗自己算的對不上。
@@ -68,12 +111,14 @@ class DemoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '懸浮球 Demo',
+      onGenerateTitle: (BuildContext context) =>
+          AppLocalizations.of(context)!.appTitle,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A6CF7)),
-        useMaterial3: true,
-      ),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
       home: const HomePage(),
     );
   }
@@ -134,7 +179,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
-    setState(() => _logs.insert(0, '${_now()}  收到：$message'));
+    // 懸浮層送來的字串已自帶時間，這裡不再加一次。
+    setState(() => _logs.insert(0, '$message'));
   }
 
   Future<void> _request() async {
@@ -143,6 +189,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _show() async {
+    // 常駐通知的文案在 await 之前取，避免跨 async gap 用 context。
+    final AppLocalizations l10n = AppLocalizations.of(context)!;
+    final String title = l10n.appTitle;
+    final String content = l10n.pickHint;
     if (!_granted) {
       await _request();
       if (!_granted) return;
@@ -162,18 +212,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     .display
                     .devicePixelRatio)
             .round();
-    await _startOverlay(ballPx, ball);
+    await _startOverlay(ballPx, ball, title, content);
     // closeOverlay 走的是 stopService，真正移除視窗的是稍後才跑的 onDestroy。
     // 「關閉→馬上顯示」時那個 onDestroy 會晚到、把剛建好的視窗一起收走（畫面上就是
     // 「開關幾次之後球就不見了」），所以開完要確認一次，沒撐住就重開。
     await Future<void>.delayed(const Duration(milliseconds: 600));
     if (!await FlutterOverlayWindow.isActive()) {
-      await _startOverlay(ballPx, ball);
+      await _startOverlay(ballPx, ball, title, content);
     }
     await _refresh();
   }
 
-  Future<void> _startOverlay(int ballPx, Offset ball) {
+  Future<void> _startOverlay(
+    int ballPx,
+    Offset ball,
+    String overlayTitle,
+    String overlayContent,
+  ) {
     return FlutterOverlayWindow.showOverlay(
       width: ballPx,
       height: ballPx,
@@ -192,8 +247,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       // 只能不讓它被排程。吸附改由收合時自己做，時機完全可控。
       positionGravity: PositionGravity.none,
       enableDrag: true,
-      overlayTitle: '懸浮球 Demo',
-      overlayContent: '點擊球體展開選單',
+      overlayTitle: overlayTitle,
+      overlayContent: overlayContent,
       visibility: NotificationVisibility.visibilityPublic,
     );
   }
@@ -211,22 +266,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _ping() async {
-    await FlutterOverlayWindow.shareData('主 App 說哈囉 ${_now()}');
+    await FlutterOverlayWindow.shareData(
+      AppLocalizations.of(context)!.helloFromApp(_now()),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(title: const Text('懸浮球 Demo')),
+      appBar: AppBar(title: Text(l10n.appTitle)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
-          _StatusCard(granted: _granted, active: _active, a11y: _a11y),
+          _StatusCard(
+            granted: _granted,
+            active: _active,
+            a11y: _a11y,
+            l10n: l10n,
+          ),
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: _granted ? null : _request,
             icon: const Icon(Icons.shield_outlined),
-            label: const Text('授予懸浮窗權限'),
+            label: Text(l10n.permOverlayGrant),
           ),
           const SizedBox(height: 8),
           FilledButton.icon(
@@ -234,48 +297,52 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             onPressed: _a11y
                 ? null
                 : () async {
-                    await FlutterAccessibilityService
-                        .requestAccessibilityPermission();
+                    await FlutterAccessibilityService.requestAccessibilityPermission();
                     await _refresh();
                   },
             icon: const Icon(Icons.accessibility_new),
-            label: const Text('啟用無障礙服務'),
+            label: Text(l10n.permA11yGrant),
           ),
           const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: _active ? null : _show,
             icon: const Icon(Icons.bubble_chart_outlined),
-            label: const Text('顯示懸浮球'),
+            label: Text(l10n.ballShow),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _active ? _close : null,
             icon: const Icon(Icons.close),
-            label: const Text('關閉懸浮球'),
+            label: Text(l10n.ballClose),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _active ? _ping : null,
             icon: const Icon(Icons.send_outlined),
-            label: const Text('傳訊息給懸浮球'),
+            label: Text(l10n.sendToBall),
           ),
           const SizedBox(height: 24),
           Row(
             children: <Widget>[
-              const Text('訊息紀錄', style: TextStyle(fontWeight: FontWeight.w600)),
+              Text(
+                l10n.actionLog,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               const Spacer(),
               TextButton(
                 onPressed: _logs.isEmpty ? null : () => setState(_logs.clear),
-                child: const Text('清空'),
+                child: Text(l10n.clear),
               ),
             ],
           ),
           if (_logs.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
               child: Text(
-                '（按下懸浮球裡的按鈕後會出現在這裡）',
-                style: TextStyle(color: Colors.black45),
+                l10n.actionLogEmpty,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             )
           else
@@ -296,11 +363,13 @@ class _StatusCard extends StatelessWidget {
     required this.granted,
     required this.active,
     required this.a11y,
+    required this.l10n,
   });
 
   final bool granted;
   final bool active;
   final bool a11y;
+  final AppLocalizations l10n;
 
   @override
   Widget build(BuildContext context) {
@@ -311,9 +380,9 @@ class _StatusCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           spacing: 8,
           children: <Widget>[
-            _StatusRow(label: '懸浮窗權限', ok: granted),
-            _StatusRow(label: '懸浮球運行中', ok: active),
-            _StatusRow(label: '無障礙服務（模擬點擊 / 截圖）', ok: a11y),
+            _StatusRow(label: l10n.permOverlay, ok: granted),
+            _StatusRow(label: l10n.ballRunning, ok: active),
+            _StatusRow(label: l10n.permA11y, ok: a11y),
           ],
         ),
       ),
@@ -350,11 +419,18 @@ class OverlayApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    // 懸浮層是獨立 isolate，拿不到主 App 的 theme / locale，得自己各配一份。
+    // 兩邊都跟隨系統，所以看起來會一致。
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
       // 背景必須透明，否則整個懸浮窗會是一塊不透明矩形。
       color: Colors.transparent,
-      home: Material(color: Colors.transparent, child: FloatingBall()),
+      home: const Material(color: Colors.transparent, child: FloatingBall()),
     );
   }
 }
@@ -415,6 +491,8 @@ class _FloatingBallState extends State<FloatingBall>
 
   Size get _screen => screenSizeDp();
 
+  AppLocalizations get _l10n => AppLocalizations.of(context)!;
+
   /// 球貼在右半邊還是左半邊——展開方向要跟著它走。
   bool get _onRight => _ballAtExpand.dx + kBallDp / 2 > _screen.width / 2;
 
@@ -462,11 +540,14 @@ class _FloatingBallState extends State<FloatingBall>
     final Offset? target = _target;
     if (target == null) return;
     // dispatchGesture 的座標是**實體像素**，Flutter 這側拿到的是 dp，要自己換算。
-    final double dpr =
-        WidgetsBinding.instance.platformDispatcher.views.first.display
-            .devicePixelRatio;
-    final GesturePoint point =
-        GesturePoint(target.dx * dpr, target.dy * dpr);
+    final double dpr = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .views
+        .first
+        .display
+        .devicePixelRatio;
+    final GesturePoint point = GesturePoint(target.dx * dpr, target.dy * dpr);
     final GestureDescription tap = GestureDescription(
       strokes: <GestureStroke>[
         GestureStroke(path: <GesturePoint>[point], duration: 50),
@@ -483,25 +564,47 @@ class _FloatingBallState extends State<FloatingBall>
         // 分支沒有任何 log）。最常見的成因是 app 重裝後服務先被重新綁定、那時
         // onAttachedToActivity 還沒跑過，它要的引擎快取是空的 → onServiceConnected
         // 丟 NPE。設定頁看起來仍是「已啟用」，但其實沒連上。
-        debugPrint('BALLDBG dispatchGesture 失敗');
         t.cancel();
         if (mounted) {
-          setState(() => _clickError = '派送失敗：請到「設定 → 協助工具」'
-              '把本 App 的服務關掉再重新開啟');
+          setState(() => _clickError = _l10n.dispatchFailed);
         }
       }
     });
     setState(() {});
+    _report(_l10n.logStartClicking(kClickInterval.inMilliseconds));
     // 收合面板，讓點擊真的落到下面那個 App。
     await _collapse();
   }
 
   void _stopClicking() {
     _clickTimer?.cancel();
+    _report(_l10n.stopClicking);
     setState(() {});
   }
 
+  /// 把主 App 叫回前景。
+  ///
+  /// 懸浮層與主 App 是兩個 isolate，這裡沒有 BuildContext 可以導頁，只能走 Android
+  /// intent 把 Activity 拉起來。先收合，否則全螢幕的懸浮層會蓋在它上面。
+  Future<void> _openMainApp() async {
+    await _collapse();
+    _report(_l10n.backToApp);
+    const AndroidIntent intent = AndroidIntent(
+      action: 'action_main',
+      package: 'com.louis.overlay_demo',
+      componentName: 'com.louis.overlay_demo.MainActivity',
+      flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_SINGLE_TOP],
+    );
+    await intent.launch();
+  }
+
+  /// 把懸浮層做過的動作回報給主 App，讓那邊的「訊息紀錄」變成有用的歷程。
+  void _report(String action) {
+    FlutterOverlayWindow.shareData('${_now()}  $action');
+  }
+
   Future<void> _takeScreenshot() async {
+    _report(_l10n.screenshot);
     // 系統截圖會把我們的懸浮層一起拍進去，先收合再拍。
     await _collapse();
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -535,14 +638,11 @@ class _FloatingBallState extends State<FloatingBall>
         : 0;
     double x = pos.x;
     // 沿用原生那條收斂曲線（每拍往目標收掉 1/3），手感一致。
-    debugPrint('BALLDBG snap start from=${pos.x} dest=$destX mode=$_mode');
     _snapTimer = Timer.periodic(const Duration(milliseconds: 20), (Timer t) {
       if (!mounted || _mode != _BallMode.idle) {
-        debugPrint('BALLDBG snap abort mode=$_mode');
         t.cancel();
         return;
       }
-      debugPrint('BALLDBG snap tick x=$x');
       x = (2 * (x - destX)) / 3 + destX;
       if ((x - destX).abs() < 1) {
         x = destX;
@@ -553,7 +653,6 @@ class _FloatingBallState extends State<FloatingBall>
   }
 
   Future<void> _expand() async {
-    debugPrint('BALLDBG expand enter snapActive=${_snapTimer?.isActive}');
     // 吸附還在跑的話先停掉，否則它跟下面搬視窗的呼叫會搶同一組 LayoutParams。
     _snapTimer?.cancel();
     final OverlayPosition pos = await FlutterOverlayWindow.getOverlayPosition();
@@ -562,6 +661,12 @@ class _FloatingBallState extends State<FloatingBall>
     // 半成品狀態，畫出來就像在滑動。切換期間索性什麼都不畫（見 build 的 switching），
     // 幾何到位了才換版型——視覺上是乾脆的切換，代價是約 1～3 幀的空白。
     setState(() => _mode = _BallMode.switching);
+    // 讓「什麼都不畫」這一幀真的被光柵化，再去動視窗。
+    //
+    // Android 在視窗改變大小時，會把既有的 surface 內容**拉伸到新的邊界**，直到新的
+    // frame 送達。setState 只是排了一次重繪，若不等它畫完就改尺寸，被拉伸的仍是上一張
+    // 有球的畫面——看起來就是球瞬間變超大鋪滿螢幕。
+    await WidgetsBinding.instance.endOfFrame;
     // 展開期間關掉原生拖曳（resizeOverlay 的第三個參數），否則整片全螢幕視窗都能拖。
     // 寬度傳 -1 代表 MATCH_PARENT；高度沒有等效的 sentinel（外掛的判斷式恆真、
     // 一律會跑 dpToPx），只能餵實際的 dp 值。
@@ -576,16 +681,13 @@ class _FloatingBallState extends State<FloatingBall>
         ),
       ),
     ]);
+    await Future<void>.delayed(kExpandRevealDelay);
     if (!mounted) return;
     setState(() => _mode = _BallMode.expanded);
     _refreshA11y();
-    debugPrint('BALLDBG expand geometry done '
-        'at=${await FlutterOverlayWindow.getOverlayPosition()} '
-        'snapActive=${_snapTimer?.isActive}');
   }
 
   Future<void> _collapse() async {
-    debugPrint('BALLDBG collapse enter snapActive=${_snapTimer?.isActive}');
     // 原生的吸附動畫關掉了，改在這裡自己吸附：收合本來就要指定落點，順手貼到最近的邊。
     // 吸附關掉時就原地放回去，不要偷偷把球挪走。
     final int x = _snapEnabled
@@ -594,6 +696,12 @@ class _FloatingBallState extends State<FloatingBall>
     final int y = _ballAtExpand.dy.round();
     _ballAtExpand = Offset(x.toDouble(), y.toDouble());
     setState(() => _mode = _BallMode.switching);
+    // 讓「什麼都不畫」這一幀真的被光柵化，再去動視窗。
+    //
+    // Android 在視窗改變大小時，會把既有的 surface 內容**拉伸到新的邊界**，直到新的
+    // frame 送達。setState 只是排了一次重繪，若不等它畫完就改尺寸，被拉伸的仍是上一張
+    // 有球的畫面——看起來就是球瞬間變超大鋪滿螢幕。
+    await WidgetsBinding.instance.endOfFrame;
     await Future.wait(<Future<void>>[
       _callOverlay(
         () => FlutterOverlayWindow.resizeOverlay(kBallDp, kBallDp, true),
@@ -603,8 +711,6 @@ class _FloatingBallState extends State<FloatingBall>
     await Future<void>.delayed(kCollapseRevealDelay);
     if (!mounted) return;
     setState(() => _mode = _BallMode.idle);
-    debugPrint('BALLDBG collapse geometry done '
-        'at=${await FlutterOverlayWindow.getOverlayPosition()}');
   }
 
   /// 重新掛載當下 channel 可能還沒人接，短暫重試而不是讓例外中斷整個流程。
@@ -685,11 +791,20 @@ class _FloatingBallState extends State<FloatingBall>
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       // 視窗此時是全螢幕且位於 (0,0)，所以 globalPosition 就是螢幕座標。
-      onTapDown: (TapDownDetails d) {
+      // 用 onTapUp 而不是 onTapDown：onTapDown 會在手指還按著時就換掉 widget tree，
+      // 後續的事件落到剛建出來的收合手勢上，面板就被關掉了。等整個 tap 在 picker 內
+      // 完成再切換，選完會直接回到面板。
+      onTapUp: (TapUpDetails d) {
         setState(() {
           _target = d.globalPosition;
           _picking = false;
         });
+        _report(
+          _l10n.logSetTarget(
+            d.globalPosition.dx.toStringAsFixed(0),
+            d.globalPosition.dy.toStringAsFixed(0),
+          ),
+        );
       },
       child: Stack(
         children: <Widget>[
@@ -700,12 +815,12 @@ class _FloatingBallState extends State<FloatingBall>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
-                '點一下要連點的位置',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              child: Text(
+                _l10n.pickHint,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -753,7 +868,7 @@ class _FloatingBallState extends State<FloatingBall>
           height: kBallDp.toDouble(),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: const Color(0xFF4A6CF7).withValues(alpha: 0.9),
+            color: BlueSkin.main.withValues(alpha: 0.9),
           ),
           child: const Icon(Icons.blur_on, color: Colors.white, size: 24),
         ),
@@ -764,15 +879,20 @@ class _FloatingBallState extends State<FloatingBall>
   Widget _buildPanel() {
     final Offset? target = _target;
     final String? error = _clickError;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
     return Container(
       width: kPanelWidthDp.toDouble(),
       height: kPanelHeightDp.toDouble(),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.96),
+        color: scheme.surface.withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(16),
         boxShadow: const <BoxShadow>[
-          BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: Column(
@@ -780,9 +900,12 @@ class _FloatingBallState extends State<FloatingBall>
         children: <Widget>[
           Row(
             children: <Widget>[
-              const Text(
-                '懸浮選單',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              Text(
+                _l10n.menuTitle,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
               ),
               const Spacer(),
               GestureDetector(
@@ -793,22 +916,24 @@ class _FloatingBallState extends State<FloatingBall>
           ),
           const SizedBox(height: 4),
           if (!_a11yEnabled)
-            const _PanelNote(
-              text: '需先到「設定 → 協助工具」啟用本 App 的無障礙服務',
-              color: Colors.redAccent,
-            )
+            _PanelNote(text: _l10n.a11yHint, color: Colors.redAccent)
           else if (error != null)
             _PanelNote(text: error, color: Colors.redAccent)
           else
             _PanelNote(
               text: target == null
-                  ? '尚未設定點擊位置'
-                  : '點擊位置 (${target.dx.toStringAsFixed(0)}, '
-                        '${target.dy.toStringAsFixed(0)})',
-              color: Colors.black54,
+                  ? _l10n.targetUnset
+                  : _l10n.targetAt(
+                      target.dx.toStringAsFixed(0),
+                      target.dy.toStringAsFixed(0),
+                    ),
+              color: scheme.onSurfaceVariant,
             ),
           if (_lastFromApp != null)
-            _PanelNote(text: '主 App：$_lastFromApp', color: Colors.black38),
+            _PanelNote(
+              text: _l10n.fromApp('$_lastFromApp'),
+              color: scheme.onSurfaceVariant,
+            ),
           const SizedBox(height: 6),
           // 內容長度會隨狀態文字變動，用可捲動區域包住，避免任何情況下 overflow。
           Expanded(
@@ -818,15 +943,20 @@ class _FloatingBallState extends State<FloatingBall>
                 spacing: 6,
                 children: <Widget>[
                   _PanelButton(
-                    label: '吸附邊緣：${_snapEnabled ? '開' : '關'}',
-                    onTap: () => setState(() => _snapEnabled = !_snapEnabled),
+                    label: _l10n.snapEdge(_snapEnabled ? _l10n.on : _l10n.off),
+                    onTap: () {
+                      setState(() => _snapEnabled = !_snapEnabled);
+                      _report(
+                        _l10n.snapEdge(_snapEnabled ? _l10n.on : _l10n.off),
+                      );
+                    },
                   ),
                   _PanelButton(
-                    label: '設定點擊位置',
+                    label: _l10n.setTarget,
                     onTap: () => setState(() => _picking = true),
                   ),
                   _PanelButton(
-                    label: _clicking ? '停止連點' : '開始連點',
+                    label: _clicking ? _l10n.stopClicking : _l10n.startClicking,
                     filled: !_clicking,
                     danger: _clicking,
                     // 沒設定目標就沒得點；連點中則永遠可以停。
@@ -834,13 +964,8 @@ class _FloatingBallState extends State<FloatingBall>
                         ? _stopClicking
                         : (target == null ? null : _startClicking),
                   ),
-                  _PanelButton(label: '螢幕截圖', onTap: _takeScreenshot),
-                  _PanelButton(
-                    label: '回報給主 App',
-                    onTap: () => FlutterOverlayWindow.shareData(
-                      '懸浮球按了按鈕 ${_now()}',
-                    ),
-                  ),
+                  _PanelButton(label: _l10n.screenshot, onTap: _takeScreenshot),
+                  _PanelButton(label: _l10n.backToApp, onTap: _openMainApp),
                 ],
               ),
             ),

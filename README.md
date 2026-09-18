@@ -2,7 +2,10 @@
 
 Android 懸浮球（類 AssistiveTouch）的 Flutter 實作驗證。個人自用，非產品。
 
-球可拖曳、吸附邊緣，點一下展開選單；選單提供模擬點擊（可連點）與螢幕截圖。
+球可拖曳、吸附邊緣（可開關），點一下展開選單。選單提供：設定連點目標、開始／停止連點
+（300ms 間隔）、螢幕截圖、返回 App。懸浮層做過的動作會回報給主 App 列成紀錄。
+主題與語系跟隨系統（日／夜、中／英），配色沿用一套慣用的藍色主題。
+
 **僅 Android**——iOS 沒有任何公開 API 能畫到其他 App 之上。
 
 ## 需要兩道獨立權限
@@ -21,8 +24,19 @@ fvm flutter build apk --debug
 
 ## 本地修正的第三方套件
 
-`packages/flutter_accessibility_service/` 是 pub.dev 1.2.0 的複本（MIT，作者 Iheb Briki），
-透過 `dependency_overrides` 取代上游。**只改了一處**：
+兩個套件各 vendor 一份修正版（`packages/`，走 `dependency_overrides`）。兩個問題同一種
+性質：**上游假設自己只會被註冊在一個 engine 上**，而這個 app 有兩個（主 App 與懸浮層）。
+
+### `flutter_overlay_window`（0.5.0 的複本）
+
+`WindowSetup.messenger` 是靜態欄位，卻在 `onAttachedToEngine` 指派。外掛在兩個 engine
+各註冊一次，後註冊的（懸浮層）覆蓋前者，於是 `OverlayService` 把懸浮層的 `shareData()`
+**轉回懸浮層自己**，主 App 永遠收不到。改成在 `onAttachedToActivity` 指派——只有主
+engine 會有 Activity，那是唯一能分辨兩者的地方。
+
+### `flutter_accessibility_service`（1.2.0 的複本，MIT，作者 Iheb Briki）
+
+**只改了一處**：
 
 `AccessibilityListener.onServiceConnected()` 原本對一個「只在 `onAttachedToActivity`
 才會被建立」的快取 engine 做 `Objects.requireNonNull`。當行程是被無障礙服務拉起來的
@@ -34,10 +48,19 @@ fvm flutter build apk --debug
 
 ## 已知問題
 
-**收合時球的位置會有約 280ms 的追趕。** 實測 `getOverlayPosition()` 回報的 LayoutParams
-在 1ms 內就是最終值，但畫面上的視窗要約 283ms 才追到位——搬移發生在 surface / 合成器那層，
-Dart 這側碰不到。目前的處置是收合後延遲 180ms 才把球畫出來（`kCollapseRevealDelay`），
-**遮蔽症狀、非修正成因**。
+**視窗改變大小 / 位置時，畫面會落後參數約 280ms。** 實測 `getOverlayPosition()` 回報的
+LayoutParams 在 1ms 內就是最終值，但畫面上的視窗要約 283ms 才追到位——搬移發生在
+surface / 合成器那層，Dart 這側碰不到。
+
+目前用三個手段壓住，**都是遮蔽症狀、非修正成因**：
+
+1. 轉場期間什麼都不畫（`_BallMode.switching`）
+2. 動視窗前先 `await endOfFrame`，確保被系統拉伸的是空白而不是那顆球
+3. 幾何到位後再延遲才顯示（`kCollapseRevealDelay` 300ms / `kExpandRevealDelay` 200ms），
+   值是逐幀量出來的
+
+左右兩側手感原本不同，也是同一個成因：展開一律把視窗錨到 (0,0)，球在左緣時 x 不用搬，
+在右緣時要橫移將近一個螢幕寬。第 3 點把兩邊拉齊。
 
 ## 踩過的坑（都寫在 `lib/main.dart` 的註解裡）
 
@@ -48,3 +71,6 @@ Dart 這側碰不到。目前的處置是收合後延遲 180ms 才把球畫出�
 - 原生 `onStartCommand` 最後還會 `moveOverlay` 一次，會蓋掉 Dart 這側擺的位置
 - `positionGravity != none` 時，**連單純點一下**也會排一個吸附動畫 timer，跟程式化移動搶 LayoutParams
 - `dispatchGesture` 的座標是實體像素，不是 dp
+- 連點目標若落在球底下，那一下會被我們自己的懸浮窗吃掉（所以吸附要能關）
+- 選點用 `onTapUp` 而非 `onTapDown`：後者會在手指還按著時換掉 widget tree，
+  後續事件落到剛建出來的收合手勢上，面板就被關掉了
