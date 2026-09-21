@@ -181,6 +181,41 @@ public class OverlayService extends Service implements View.OnTouchListener {
     }
 
 
+    // LOCAL PATCH: the overlay window is not an Activity, so nothing repositions it when the
+    // display rotates — it keeps its old x/y and can end up completely off-screen (measured:
+    // y=2084 while the landscape viewport is only 1033 tall, leaving the ball unreachable).
+    // Dart's didChangeMetrics is not a usable hook here: the ball's own window is a fixed
+    // 48dp and its viewport metrics do not change on rotation, so the callback never fires.
+    // A Service does reliably receive onConfigurationChanged, so clamp here.
+    /// MATCH_PARENT / FILL_PARENT 是負值，不是尺寸；把它們解讀成整個螢幕那一軸的長度。
+    private static int sizeOf(int paramSize, int screenSize, int measured) {
+        if (paramSize == WindowManager.LayoutParams.MATCH_PARENT) return screenSize;
+        return paramSize > 0 ? paramSize : measured;
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (windowManager == null || flutterView == null) return;
+        windowManager.getDefaultDisplay().getSize(szWindow);
+        WindowManager.LayoutParams params =
+                (WindowManager.LayoutParams) flutterView.getLayoutParams();
+        // 用 params 的尺寸而非 flutterView.getWidth()/getHeight()：後者是即時量測值，若 config
+        // change 剛好落在 resizeOverlay 之後、layout 追上之前，會量到舊值或 0，上界就算錯了。
+        // MATCH_PARENT（-1）要當成「滿版」而不是退回量測值——面板展開時 width 正是 -1，
+        // 退回去就等於這個修正在最常互動的狀態下悄悄失效。
+        int w = sizeOf(params.width, szWindow.x, flutterView.getWidth());
+        int h = sizeOf(params.height, szWindow.y, flutterView.getHeight());
+        int maxX = Math.max(0, szWindow.x - w);
+        int maxY = Math.max(0, szWindow.y - h);
+        int clampedX = Math.min(Math.max(params.x, 0), maxX);
+        int clampedY = Math.min(Math.max(params.y, 0), maxY);
+        if (clampedX == params.x && clampedY == params.y) return;
+        params.x = clampedX;
+        params.y = clampedY;
+        windowManager.updateViewLayout(flutterView, params);
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
     private int screenHeight() {
         Display display = windowManager.getDefaultDisplay();
