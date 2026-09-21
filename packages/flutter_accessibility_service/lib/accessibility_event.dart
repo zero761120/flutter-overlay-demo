@@ -26,6 +26,14 @@ class AccessibilityEvent {
   /// https://developer.android.com/reference/android/view/accessibility/AccessibilityEvent#getEventType()
   EventType? eventType;
 
+  /// LOCAL PATCH: the native side has always sent these two; the Dart class simply never
+  /// exposed them. `nodesText` is the collected text of the whole subtree — for scraping,
+  /// it is the single most useful field there is.
+  List<String>? nodesText;
+
+  /// LOCAL PATCH: content description of this node (added natively in the same patch).
+  String? contentDescription;
+
   /// Gets the text of this node.
   /// https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#getText()
   String? text;
@@ -122,7 +130,9 @@ class AccessibilityEvent {
       eventType = EventType.values
           .firstWhereOrNull((element) => element.id == map['eventType']);
     }
-    text = map['capturedText'].toString();
+    // LOCAL PATCH: unconditional toString() turned an absent value into the four-character
+    // string "null", which every caller then has to special-case. Keep it genuinely null.
+    text = map['capturedText']?.toString();
     contentChangeTypes = map['contentChangeTypes'] == null
         ? null
         : (ContentChangeTypes.values.firstWhereOrNull(
@@ -145,6 +155,10 @@ class AccessibilityEvent {
     screenBounds = map['screenBounds'] != null
         ? ScreenBounds.fromMap(map['screenBounds'])
         : null;
+    nodesText = map['nodesText'] != null
+        ? (map['nodesText'] as List<dynamic>).map((dynamic e) => '$e').toList()
+        : null;
+    contentDescription = map['contentDescription'];
     subNodes = map['subNodesActions'] != null
         ? (map['subNodesActions'] as List<dynamic>)
             .map((e) => AccessibilityEvent.fromMap(e))

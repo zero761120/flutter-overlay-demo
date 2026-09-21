@@ -233,6 +233,13 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
     @Override
     public void onListen(Object arguments, EventChannel.EventSink events) {
         if (Utils.isAccessibilitySettingsOn(context)) {
+            // LOCAL PATCH: drop whatever accumulated while nobody was listening. Events are
+            // enqueued unconditionally, so by the time a subscriber attaches the queue already
+            // holds background noise (notifications, window switches, other apps). Since the
+            // receiver polls FIFO, without this the first events a new subscriber sees are stale
+            // ones from before it started — a flow recorder would open its recording with steps
+            // that never happened in that session.
+            AccessibilityListener.PAYLOADS.clear();
             /// Set up receiver
             IntentFilter intentFilter = new IntentFilter();
             intentFilter.addAction(ACCESSIBILITY_INTENT);

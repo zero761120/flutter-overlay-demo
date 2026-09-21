@@ -47,6 +47,30 @@ import io.flutter.embedding.engine.FlutterEngineCache;
 public class AccessibilityListener extends AccessibilityService {
     private static AccessibilityListener instance;
 
+    /// LOCAL PATCH: payload queue. The broadcast stays a bare signal and the captured content
+    /// never leaves the process.
+    ///
+    /// Upstream left the payload in one shared-prefs slot, so back-to-back events overwrote each
+    /// other before the receiver read them. Putting it on the Intent instead fixed that race but
+    /// created a much worse problem: sendBroadcast carries no receiverPermission and the action is
+    /// a plain string, so any app on the device could register a receiver and passively read every
+    /// other app's on-screen text. Both engines live in the same process, so an in-process queue
+    /// fixes the race while exposing nothing — and it is not subject to Binder size limits either.
+    /// Bounded on purpose: events are enqueued unconditionally, but only drained while something
+    /// on the Dart side is listening. Unbounded, an idle app would grow this forever — the shared
+    /// slot it replaced was at least self-limiting. Dropping the oldest keeps the newest events,
+    /// which are the ones a live listener is about to want.
+    static final java.util.concurrent.ConcurrentLinkedQueue<String> PAYLOADS =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private static final int MAX_PENDING_PAYLOADS = 64;
+
+    private static void enqueuePayload(String json) {
+        PAYLOADS.add(json);
+        while (PAYLOADS.size() > MAX_PENDING_PAYLOADS) {
+            PAYLOADS.poll();
+        }
+    }
+
     /// LOCAL PATCH: "enabled in settings" and "actually bound" are different things — the
     /// service can be listed as enabled while onServiceConnected never completed. Callers
     /// need to tell those apart, otherwise a failed action looks like a successful one.
@@ -60,8 +84,11 @@ public class AccessibilityListener extends AccessibilityService {
     private static final int maxDepth = 20;
     private static LruCache<String, AccessibilityNodeInfo> nodeMap =
             new LruCache<>(CACHE_SIZE);
-    private static final int DEFAULT_MAX_TREE_DEPTH = 15;
+    // LOCAL PATCH: 15 truncates real layouts — measured "Maximum tree depth reached: 15"
+    // on an ordinary list screen, which silently drops the leaf nodes that carry the text.
+    private static final int DEFAULT_MAX_TREE_DEPTH = 60;
     private int maximumTreeDepth = DEFAULT_MAX_TREE_DEPTH;
+    private static final int MAX_TREE_NODES = 800;
 
     public static AccessibilityNodeInfo getNodeInfo(String id) {
         return nodeMap.get(id);
@@ -80,6 +107,35 @@ public class AccessibilityListener extends AccessibilityService {
             HashSet<AccessibilityNodeInfo> traversedNodes = new HashSet<>();
             HashMap<String, Object> data = new HashMap<>();
             if (parentNodeInfo == null) {
+                // LOCAL PATCH: upstream dropped every event whose getSource() is null, which in
+                // practice discards almost all TYPE_VIEW_CLICKED — measured on Android 15, clicks
+                // consistently arrive with source=null. That is precisely the event anything
+                // recording a user flow needs. The AccessibilityEvent itself still carries
+                // packageName, className and getText() (for a click, usually the tapped label),
+                // so emit that much instead of throwing the event away.
+                HashMap<String, Object> minimal = new HashMap<>();
+                minimal.put("eventType", eventType);
+                // LOCAL PATCH: not String.valueOf — that turns a null into the literal "null",
+                // the same anti-pattern fixed for capturedText/contentDescription below. A caller
+                // filtering on `packageName == null` would never match the fake one.
+                minimal.put("packageName", accessibilityEvent.getPackageName() == null ? null
+                        : accessibilityEvent.getPackageName().toString());
+                minimal.put("className", accessibilityEvent.getClassName() == null ? null
+                        : accessibilityEvent.getClassName().toString());
+                minimal.put("eventTime", accessibilityEvent.getEventTime());
+                List<String> evtTexts = new ArrayList<>();
+                // LOCAL PATCH: this is the path that now carries click and text-changed events,
+                // so it is the most likely one to see a password field — guard it like the rest.
+                if (!accessibilityEvent.isPassword()) {
+                    for (CharSequence cs : accessibilityEvent.getText()) {
+                        if (cs != null && cs.length() > 0) evtTexts.add(cs.toString());
+                    }
+                }
+                minimal.put("nodesText", evtTexts);
+                enqueuePayload(storeToSharedPrefs(minimal));
+                Intent minimalIntent = new Intent(ACCESSIBILITY_INTENT);
+                minimalIntent.putExtra(SEND_BROADCAST, true);
+                sendBroadcast(minimalIntent);
                 return;
             }
             String nodeId = generateNodeId(parentNodeInfo);
@@ -104,13 +160,20 @@ public class AccessibilityListener extends AccessibilityService {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 data.put("contentChangeTypes", accessibilityEvent.getContentChangeTypes());
             }
-            if (parentNodeInfo.getText() != null) {
+            // LOCAL PATCH: see getSubNodes — the parent node needs contentDescription too, and
+            // both of these need the same isPassword guard as everything else.
+            if (!parentNodeInfo.isPassword()
+                    && parentNodeInfo.getContentDescription() != null) {
+                data.put("contentDescription",
+                        parentNodeInfo.getContentDescription().toString());
+            }
+            if (!parentNodeInfo.isPassword() && parentNodeInfo.getText() != null) {
                 data.put("capturedText", parentNodeInfo.getText().toString());
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
                 data.put("nodeId", parentNodeInfo.getViewIdResourceName());
             }
-            getSubNodes(parentNodeInfo, subNodeActions, traversedNodes, 0);
+            getSubNodes(parentNodeInfo, subNodeActions, traversedNodes, 0, nextTexts);
             data.put("nodesText", nextTexts);
             actions.addAll(parentNodeInfo.getActionList().stream().map(AccessibilityNodeInfo.AccessibilityAction::getId).collect(Collectors.toList()));
             data.put("parentActions", actions);
@@ -129,7 +192,7 @@ public class AccessibilityListener extends AccessibilityService {
                     data.put("isPip", windowInfo.isInPictureInPictureMode());
                 }
             }
-            storeToSharedPrefs(data);
+            enqueuePayload(storeToSharedPrefs(data));
             intent.putExtra(SEND_BROADCAST, true);
             sendBroadcast(intent);
         } catch (Exception ex) {
@@ -158,7 +221,12 @@ public class AccessibilityListener extends AccessibilityService {
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-    void getSubNodes(AccessibilityNodeInfo node, List<HashMap<String, Object>> arr, HashSet<AccessibilityNodeInfo> traversedNodes, int currentDepth) {
+    void getSubNodes(AccessibilityNodeInfo node, List<HashMap<String, Object>> arr, HashSet<AccessibilityNodeInfo> traversedNodes, int currentDepth, List<String> texts) {
+        // LOCAL PATCH: bound total nodes, not just depth. A wide list produces thousands of
+        // siblings at shallow depth, and this whole traversal runs synchronously on the main
+        // thread inside onAccessibilityEvent — being slow here makes the system drop the events
+        // that follow, which is exactly the click we are trying to observe.
+        if (arr.size() >= MAX_TREE_NODES) return;
         if (currentDepth >= maximumTreeDepth || node == null) {
             if (currentDepth >= maximumTreeDepth) {
                 Log.d("TREE_DEPTH", "Maximum tree depth reached: " + currentDepth);
@@ -176,7 +244,19 @@ public class AccessibilityListener extends AccessibilityService {
             windowInfo = node.getWindow();
             nested.put("mapId", mapId);
             nested.put("nodeId", node.getViewIdResourceName());
-            nested.put("capturedText", node.getText());
+            // LOCAL PATCH: upstream put the raw CharSequence here. Over the channel a null
+            // CharSequence stringifies to the literal "null", so every text-less node came
+            // back as the four-character string "null" instead of an absent value.
+            // The isPassword() guard is part of the same patch: Android already tells us which
+            // nodes hold secrets, so capturing them would be a gratuitous leak.
+            nested.put("capturedText",
+                    (node.isPassword() || node.getText() == null) ? null
+                            : node.getText().toString());
+            // LOCAL PATCH: upstream never sent contentDescription. Icon-only buttons usually
+            // have no text at all, so without this they are indistinguishable from blank nodes.
+            nested.put("contentDescription",
+                    (node.isPassword() || node.getContentDescription() == null) ? null
+                            : node.getContentDescription().toString());
             nested.put("screenBounds", getBoundingPoints(rect));
             nested.put("isClickable", node.isClickable());
             nested.put("isScrollable", node.isScrollable());
@@ -190,13 +270,24 @@ public class AccessibilityListener extends AccessibilityService {
                 nested.put("isFocused", node.getWindow().isFocused());
                 nested.put("windowType", node.getWindow().getType());
             }
+            // LOCAL PATCH: upstream declared nextTexts and shipped it as "nodesText" but never
+            // put anything in it — the field was dead on arrival. Collect the visible strings
+            // here; for scraping this is the single most useful thing the tree carries.
+            if (!node.isPassword() && node.getText() != null && node.getText().length() > 0) {
+                texts.add(node.getText().toString());
+            }
+            if (!node.isPassword()
+                    && node.getContentDescription() != null
+                    && node.getContentDescription().length() > 0) {
+                texts.add(node.getContentDescription().toString());
+            }
             arr.add(nested);
             storeNode(mapId, node);
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child == null)
                     continue;
-                getSubNodes(child, arr, traversedNodes, currentDepth + 1);
+                getSubNodes(child, arr, traversedNodes, currentDepth + 1, texts);
             }
         }
     }
@@ -334,13 +425,19 @@ public class AccessibilityListener extends AccessibilityService {
         nodeMap.put(uuid, node);
     }
 
-    void storeToSharedPrefs(HashMap<String, Object> data) {
+    // LOCAL PATCH: returns the serialized payload so the caller can put it straight on the
+    // Intent. Upstream used the broadcast purely as a signal and left the payload in this one
+    // shared slot, so back-to-back events overwrote each other before the receiver read them —
+    // silently lossy, and worst for exactly the bursty events (a click is immediately followed
+    // by content-changed). The prefs write stays for anything else that reads it.
+    String storeToSharedPrefs(HashMap<String, Object> data) {
         SharedPreferences sharedPreferences = getSharedPreferences(SHARED_PREFS_TAG, MODE_PRIVATE);
         SharedPreferences.Editor editor = sharedPreferences.edit();
         Gson gson = new Gson();
         String json = gson.toJson(data);
         editor.putString(ACCESSIBILITY_NODE, json);
         editor.apply();
+        return json;
     }
 
 }

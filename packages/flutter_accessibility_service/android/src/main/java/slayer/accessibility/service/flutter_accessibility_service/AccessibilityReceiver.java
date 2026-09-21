@@ -27,8 +27,15 @@ public class AccessibilityReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         EventChannel.EventSink sink = eventSink;
         if (sink == null) return;
-        SharedPreferences sharedPreferences = context.getSharedPreferences(SHARED_PREFS_TAG, MODE_PRIVATE);
-        String json = sharedPreferences.getString(ACCESSIBILITY_NODE, "");
+        // LOCAL PATCH: take the payload from the in-process queue. Reading it back from the
+        // shared slot means a later event can overwrite this one before we get here; putting it
+        // on the Intent instead would expose it to every app on the device (see the queue's
+        // declaration in AccessibilityListener).
+        String json = AccessibilityListener.PAYLOADS.poll();
+        if (json == null || json.isEmpty()) {
+            SharedPreferences sharedPreferences = context.getSharedPreferences(SHARED_PREFS_TAG, MODE_PRIVATE);
+            json = sharedPreferences.getString(ACCESSIBILITY_NODE, "");
+        }
         try {
             sink.success(json);
         } catch (Exception e) {
