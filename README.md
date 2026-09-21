@@ -64,7 +64,14 @@ App 的畫面文字**。這些能力本身是 Android 官方 API、用途中性�
 
 `packages/` 下的兩個套件是第三方程式的**修改版**，原作者 Iheb Briki，原授權 MIT，
 各自的 `LICENSE` 檔已完整保留。修改處在原始碼中以 `LOCAL PATCH` 註解標出，內容與理由
-見下一節。這些修正都是上游的真實缺陷，尚未回報給上游。
+見下一節。這些修正都是上游的真實缺陷。
+
+`flutter_accessibility_service` 的部分已回報：
+
+- [#46](https://github.com/X-SLAYER/flutter_accessibility_service/issues/46) — `onServiceConnected` 的 crash loop
+- [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — 五個擷取缺陷，附帶兩個未主張解法的架構問題
+
+`flutter_overlay_window` 的兩個沒報：上游最後發布是 2025-04，已停滯約 17 個月。
 
 ## 本地修正的第三方套件
 

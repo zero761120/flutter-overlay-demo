@@ -75,7 +75,17 @@ This project is MIT (see `LICENSE`).
 The two packages under `packages/` are **modified copies** of third-party code, originally by
 Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Every change is
 marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
-These fixes address genuine upstream defects that have not yet been reported upstream.
+These fixes address genuine upstream defects.
+
+The `flutter_accessibility_service` ones have been reported upstream:
+
+- [#46](https://github.com/X-SLAYER/flutter_accessibility_service/issues/46) — the
+  `onServiceConnected` crash loop
+- [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — the five capture
+  defects, plus two architectural findings where no fix is proposed
+
+The two `flutter_overlay_window` ones were not reported: upstream's last release was 2025-04,
+roughly 17 months ago.
 
 ## Locally patched third-party packages
 
