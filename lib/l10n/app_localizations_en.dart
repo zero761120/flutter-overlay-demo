@@ -111,4 +111,51 @@ class AppLocalizationsEn extends AppLocalizations {
   String logStartClicking(int ms) {
     return 'Auto tap started (every ${ms}ms)';
   }
+
+  @override
+  String get recordFlow => 'Record a flow';
+
+  @override
+  String recordStop(int n) {
+    return 'Stop recording ($n steps)';
+  }
+
+  @override
+  String get logRecordStart => 'Flow recording started';
+
+  @override
+  String logRecordSaved(String path, int n) {
+    return 'Saved: $path ($n steps)';
+  }
+
+  @override
+  String get clearRecordings => 'Clear recordings';
+
+  @override
+  String logRecordingsCleared(int n) {
+    return 'Cleared $n recording(s)';
+  }
+
+  @override
+  String get recordings => 'Recordings';
+
+  @override
+  String get recordingsEmpty => 'No recordings yet';
+
+  @override
+  String stepsCount(int n) {
+    return '$n steps';
+  }
+
+  @override
+  String get showRaw => 'Show raw JSON';
+
+  @override
+  String get hideRaw => 'Hide raw JSON';
+
+  @override
+  String get clicksOnly => 'Taps only';
+
+  @override
+  String get allSteps => 'All steps';
 }

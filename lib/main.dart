@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_accessibility_service/accessibility_event.dart';
 import 'package:flutter_accessibility_service/constants.dart';
 import 'package:flutter_accessibility_service/flutter_accessibility_service.dart';
 import 'package:flutter_accessibility_service/gesture_description.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:overlay_demo/l10n/app_localizations.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// 懸浮球收合後的邊長（dp）。
 ///
@@ -23,6 +27,15 @@ const int kPanelHeightDp = 360;
 
 /// 連點間隔。
 const Duration kClickInterval = Duration(milliseconds: 300);
+
+/// 保留幾份錄製檔。內容是其他 App 的畫面文字，不該無限累積。
+const int kMaxRecordingFiles = 5;
+
+/// 錄製期間多久才確認一次懸浮球還在。
+const Duration kOverlayCheckInterval = Duration(seconds: 1);
+
+/// 原始 JSON 在畫面上最多顯示多少字元。
+const int kRawPreviewChars = 20000;
 
 /// 收合後延遲多久才把球畫出來。
 ///
@@ -321,6 +334,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             icon: const Icon(Icons.send_outlined),
             label: Text(l10n.sendToBall),
           ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const RecordingsPage()),
+            ),
+            icon: const Icon(Icons.article_outlined),
+            label: Text(l10n.recordings),
+          ),
           const SizedBox(height: 24),
           Row(
             children: <Widget>[
@@ -354,6 +375,193 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// 錄製檔清單。
+///
+/// 錄製是懸浮層那個 isolate 寫的，但檔案落在 app 的 documents 目錄，主 App 讀得到同一份。
+class RecordingsPage extends StatefulWidget {
+  const RecordingsPage({super.key});
+
+  @override
+  State<RecordingsPage> createState() => _RecordingsPageState();
+}
+
+class _RecordingsPageState extends State<RecordingsPage> {
+  List<File> _files = <File>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final Directory dir = await getApplicationDocumentsDirectory();
+    final List<File> files =
+        dir
+            .listSync()
+            .whereType<File>()
+            .where((File f) => f.path.contains('/flow-'))
+            .toList()
+          ..sort((File a, File b) => b.path.compareTo(a.path));
+    if (!mounted) return;
+    setState(() => _files = files);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context)!;
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.recordings)),
+      body: _files.isEmpty
+          ? Center(child: Text(l10n.recordingsEmpty))
+          : ListView.separated(
+              itemCount: _files.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (BuildContext context, int i) {
+                final File f = _files[i];
+                final int kb = (f.lengthSync() / 1024).round();
+                return ListTile(
+                  title: Text(f.uri.pathSegments.last),
+                  subtitle: Text('$kb KB'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => RecordingDetailPage(file: f),
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+/// 單份錄製的內容。
+///
+/// 預設只列點擊——原始 JSON 一份可能上百 KB、大半是 contentChanged 的雜訊，直接攤開沒人讀
+/// 得下去。想追細節再展開原始內容。
+class RecordingDetailPage extends StatefulWidget {
+  const RecordingDetailPage({required this.file, super.key});
+
+  final File file;
+
+  @override
+  State<RecordingDetailPage> createState() => _RecordingDetailPageState();
+}
+
+class _RecordingDetailPageState extends State<RecordingDetailPage> {
+  List<dynamic> _steps = <dynamic>[];
+  String _raw = '';
+  bool _showRaw = false;
+  bool _clicksOnly = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  String? _error;
+
+  Future<void> _load() async {
+    try {
+      final String raw = await widget.file.readAsString();
+      final List<dynamic> steps = jsonDecode(raw) as List<dynamic>;
+      if (!mounted) return;
+      setState(() {
+        _raw = raw;
+        _steps = steps;
+      });
+    } catch (e) {
+      // 檔案可能是半截的——錄製中途行程被砍掉就會留下寫到一半的 JSON。沒有這層的話
+      // jsonDecode 直接拋例外、整頁變成紅色錯誤畫面，看不出是檔案壞了還是程式壞了。
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    }
+  }
+
+  bool _isTap(Map<String, dynamic> s) =>
+      s['event'] == 'typeViewClicked' || s['event'] == 'typeViewLongClicked';
+
+  /// 一步在畫面上怎麼稱呼：contentDescription 優先於 text，因為圖示按鈕只有前者。
+  String _labelOf(Map<String, dynamic> s) {
+    final Map<String, dynamic> node =
+        (s['node'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    final List<dynamic> texts = (s['texts'] as List<dynamic>?) ?? <dynamic>[];
+    return node['desc']?.toString() ??
+        node['text']?.toString() ??
+        (texts.isNotEmpty ? texts.first.toString() : '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context)!;
+    final List<Map<String, dynamic>> shown = _steps
+        .cast<Map<String, dynamic>>()
+        .where((Map<String, dynamic> s) => !_clicksOnly || _isTap(s))
+        .toList();
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(l10n.stepsCount(_steps.length)),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => setState(() => _clicksOnly = !_clicksOnly),
+            child: Text(_clicksOnly ? l10n.allSteps : l10n.clicksOnly),
+          ),
+        ],
+      ),
+      body: _error != null
+          ? Padding(padding: const EdgeInsets.all(24), child: Text(_error!))
+          : ListView(
+              padding: const EdgeInsets.all(12),
+              children: <Widget>[
+                ...shown.map((Map<String, dynamic> s) {
+                  final Map<String, dynamic> node =
+                      (s['node'] as Map<String, dynamic>?) ??
+                      <String, dynamic>{};
+                  final String label = _labelOf(s);
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(
+                      _isTap(s)
+                          ? Icons.touch_app
+                          : Icons.remove_red_eye_outlined,
+                      size: 18,
+                    ),
+                    title: Text(label.isEmpty ? '(${s['event']})' : label),
+                    subtitle: Text(
+                      '${s['pkg']}\n${node['id'] ?? ''}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    isThreeLine: node['id'] != null,
+                  );
+                }),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => setState(() => _showRaw = !_showRaw),
+                  child: Text(_showRaw ? l10n.hideRaw : l10n.showRaw),
+                ),
+                if (_showRaw)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: SelectableText(
+                      // 只渲染前面一段：一份錄製可能上百 KB 到數 MB，整份塞進單一 Text 會做一次
+                      // 巨大的文字排版，畫面直接卡住。要完整內容用 adb 取檔比在手機上讀實際。
+                      _raw.length > kRawPreviewChars
+                          ? '${_raw.substring(0, kRawPreviewChars)}\n…（已截斷，完整內容請取檔）'
+                          : _raw,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 }
@@ -486,6 +694,12 @@ class _FloatingBallState extends State<FloatingBall>
   /// 連點失敗的可行動提示，成功時清空。
   String? _clickError;
 
+  /// 錄製操作流程用。錄的是**別的 App** 的無障礙事件，自己的封包要濾掉。
+  StreamSubscription<AccessibilityEvent>? _a11ySub;
+  final List<Map<String, dynamic>> _steps = <Map<String, dynamic>>[];
+  String? _lastTreeFingerprint;
+  bool get _recording => _a11ySub != null;
+
   String? _lastFromApp;
   StreamSubscription<dynamic>? _sub;
 
@@ -511,6 +725,7 @@ class _FloatingBallState extends State<FloatingBall>
     WidgetsBinding.instance.removeObserver(this);
     _snapTimer?.cancel();
     _clickTimer?.cancel();
+    _a11ySub?.cancel();
     _sub?.cancel();
     super.dispose();
   }
@@ -626,6 +841,158 @@ class _FloatingBallState extends State<FloatingBall>
       return;
     }
     _report(label);
+  }
+
+  // ── 錄製操作流程 ──
+  //
+  // 無障礙露出多少完全看目標 App 怎麼寫的（有沒有設 id / contentDescription、用標準元件
+  // 還是自繪、Flutter 只給 Semantics…），沒有規格可查、只能實際看。這個錄製器就是「看」
+  // 的工具：錄一次、把事件序列落成 JSON，省掉「猜 → 改碼 → 重裝 → 測」那一圈。
+
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      await _stopRecording();
+      return;
+    }
+    _steps.clear();
+    _lastTreeFingerprint = null;
+    _a11ySub = FlutterAccessibilityService.accessStream.listen(_onA11yEvent);
+    _report(_l10n.logRecordStart);
+    setState(() {});
+    await _collapse();
+  }
+
+  void _onA11yEvent(AccessibilityEvent e) {
+    // 主 App 按「關閉懸浮球」走 stopService，只拆原生 View，不會重跑 initState / dispose、
+    // 也不通知 Dart 側——這條訂閱收不到任何訊號。不自己檢查的話，視窗關了它還在收整台裝置
+    // 的無障礙事件往記憶體堆，而使用者已經按不到停止鍵，錄到的東西也永遠不會落檔。
+    // 同 _clickTimer 的處置。
+    _stopIfOverlayGone();
+    // 自己的懸浮層與主 App 會製造大量雜訊，濾掉。
+    if (e.packageName == null ||
+        e.packageName!.startsWith('com.louis.overlay_demo')) {
+      return;
+    }
+    if (_steps.length >= 500) return;
+    final bool isScreenChange =
+        e.eventType == EventType.typeWindowStateChanged ||
+        e.eventType == EventType.typeWindowsChanged;
+    // 樹要不要收：只在「換畫面」收的話，實測一整段操作只會拿到一棵。改成看內容指紋，
+    // 樹變了就收一次、沒變就跳過——既不會被 contentChanged 洗爆，也不會漏掉新畫面。
+    final List<AccessibilityEvent> sub = e.subNodes ?? <AccessibilityEvent>[];
+    final String fingerprint =
+        '${e.packageName}|${sub.length}|${(e.nodesText ?? <String>[]).take(8).join('~')}';
+    final bool treeIsNew =
+        sub.isNotEmpty && fingerprint != _lastTreeFingerprint;
+    if (treeIsNew) _lastTreeFingerprint = fingerprint;
+    _steps.add(<String, dynamic>{
+      'at': (e.eventTime ?? DateTime.now()).toIso8601String(),
+      'pkg': e.packageName,
+      'event': e.eventType?.name,
+      'node': _nodeToJson(e),
+      // 子樹的文字集合——爬資訊時這欄最有用，原生一直有送、只是上游 Dart 沒暴露。
+      if ((e.nodesText ?? <String>[]).isNotEmpty) 'texts': e.nodesText,
+      if (isScreenChange || treeIsNew)
+        'tree': sub.take(300).map(_nodeToJson).toList(),
+    });
+  }
+
+  Map<String, dynamic> _nodeToJson(AccessibilityEvent e) {
+    final ScreenBounds? b = e.screenBounds;
+    return <String, dynamic>{
+      if (e.nodeId != null) 'id': e.nodeId,
+      if (e.text != null && e.text!.isNotEmpty) 'text': e.text,
+      if (e.contentDescription != null && e.contentDescription!.isNotEmpty)
+        'desc': e.contentDescription,
+      if (b != null) 'bounds': <int?>[b.left, b.top, b.right, b.bottom],
+      if (e.isClickable ?? false) 'clickable': true,
+      if (e.isScrollable ?? false) 'scrollable': true,
+      if (e.isEditable ?? false) 'editable': true,
+      if ((e.actions ?? <NodeAction>[]).isNotEmpty)
+        'actions': e.actions!.map((NodeAction a) => a.name).toList(),
+    };
+  }
+
+  /// 懸浮球已經被關掉就自行停止錄製並落檔。
+  bool _checkingOverlay = false;
+  DateTime _lastOverlayCheck = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _stopIfOverlayGone() async {
+    if (_checkingOverlay || _a11ySub == null) return;
+    // 節流：這是每一則無障礙事件都會走到的地方，而捲動時事件非常密集。沒有間隔的話
+    // 等於在滑動期間持續發 MethodChannel 往返，只為了問一件變動極慢的事。
+    final DateTime now = DateTime.now();
+    if (now.difference(_lastOverlayCheck) < kOverlayCheckInterval) return;
+    _lastOverlayCheck = now;
+    _checkingOverlay = true;
+    try {
+      if (!await FlutterOverlayWindow.isActive()) await _stopRecording();
+    } finally {
+      _checkingOverlay = false;
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    await _a11ySub?.cancel();
+    _a11ySub = null;
+    // 內部儲存而非 getExternalStorageDirectory()：這些檔案裝的是**其他 App 的畫面文字**，
+    // 放 app-private 的內部目錄，其他工具與備份機制碰不到。debug build 要取出用
+    // `adb exec-out run-as com.louis.overlay_demo cat <path>`。
+    final Directory dir = await getApplicationDocumentsDirectory();
+    final String stamp = DateTime.now().toIso8601String().replaceAll(
+      RegExp(r'[:.]'),
+      '-',
+    );
+    final File f = File('${dir.path}/flow-$stamp.json');
+    try {
+      await f.writeAsString(const JsonEncoder.withIndent('  ').convert(_steps));
+      _report(_l10n.logRecordSaved(f.path, _steps.length));
+    } catch (e) {
+      // 沒有這層的話，落檔失敗會是一個未捕捉例外：UI 停在舊狀態、使用者看不到任何訊息，
+      // 整段錄製無聲消失。
+      debugPrint('flow recording save failed: $e');
+      if (mounted) setState(() => _clickError = '$e');
+    }
+    // 清理與落檔分開：合在同一個 try 的話，檔案明明存成功、只是清舊檔失敗，
+    // 使用者卻會看到「儲存失敗」。
+    await _pruneOldRecordings(dir);
+    if (mounted) setState(() {});
+  }
+
+  /// 清掉所有錄製檔。內容是其他 App 的畫面文字，能隨手清掉才不用等自動清理。
+  Future<void> _clearRecordings() async {
+    try {
+      final Directory dir = await getApplicationDocumentsDirectory();
+      final List<File> files = dir
+          .listSync()
+          .whereType<File>()
+          .where((File f) => f.path.contains('/flow-'))
+          .toList();
+      for (final File f in files) {
+        await f.delete();
+      }
+      _report(_l10n.logRecordingsCleared(files.length));
+    } catch (e) {
+      debugPrint('clear recordings failed: $e');
+      if (mounted) setState(() => _clickError = '$e');
+    }
+  }
+
+  /// 只留最近幾份。內容是其他 App 的畫面文字，無限累積等於在裝置上堆明文。
+  Future<void> _pruneOldRecordings(Directory dir) async {
+    final List<File> files =
+        dir
+            .listSync()
+            .whereType<File>()
+            .where((File f) => f.path.contains('/flow-'))
+            .toList()
+          ..sort((File a, File b) => b.path.compareTo(a.path));
+    for (final File old in files.skip(kMaxRecordingFiles)) {
+      try {
+        await old.delete();
+      } catch (_) {
+        // 刪不掉就算了，不值得為此讓落檔失敗。
+      }
+    }
   }
 
   // ── 展開 / 收合 ──
@@ -980,6 +1347,18 @@ class _FloatingBallState extends State<FloatingBall>
                         : (target == null ? null : _startClicking),
                   ),
                   _PanelButton(label: _l10n.screenshot, onTap: _takeScreenshot),
+                  _PanelButton(
+                    label: _recording
+                        ? _l10n.recordStop(_steps.length)
+                        : _l10n.recordFlow,
+                    filled: _recording,
+                    onTap: _toggleRecording,
+                  ),
+                  _PanelButton(
+                    label: _l10n.clearRecordings,
+                    // 錄製中不給清，否則會刪到正要寫入的那一份。
+                    onTap: _recording ? null : _clearRecordings,
+                  ),
                   _PanelButton(label: _l10n.backToApp, onTap: _openMainApp),
                 ],
               ),

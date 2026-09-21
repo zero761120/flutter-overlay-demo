@@ -277,6 +277,84 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'開始連點（間隔 {ms}ms）'**
   String logStartClicking(int ms);
+
+  /// No description provided for @recordFlow.
+  ///
+  /// In zh, this message translates to:
+  /// **'錄製操作流程'**
+  String get recordFlow;
+
+  /// No description provided for @recordStop.
+  ///
+  /// In zh, this message translates to:
+  /// **'停止錄製（{n} 步）'**
+  String recordStop(int n);
+
+  /// No description provided for @logRecordStart.
+  ///
+  /// In zh, this message translates to:
+  /// **'開始錄製操作流程'**
+  String get logRecordStart;
+
+  /// No description provided for @logRecordSaved.
+  ///
+  /// In zh, this message translates to:
+  /// **'已存檔：{path}（{n} 步）'**
+  String logRecordSaved(String path, int n);
+
+  /// No description provided for @clearRecordings.
+  ///
+  /// In zh, this message translates to:
+  /// **'清除錄製檔'**
+  String get clearRecordings;
+
+  /// No description provided for @logRecordingsCleared.
+  ///
+  /// In zh, this message translates to:
+  /// **'已清除 {n} 份錄製檔'**
+  String logRecordingsCleared(int n);
+
+  /// No description provided for @recordings.
+  ///
+  /// In zh, this message translates to:
+  /// **'錄製檔'**
+  String get recordings;
+
+  /// No description provided for @recordingsEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'尚無錄製檔'**
+  String get recordingsEmpty;
+
+  /// No description provided for @stepsCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'{n} 步'**
+  String stepsCount(int n);
+
+  /// No description provided for @showRaw.
+  ///
+  /// In zh, this message translates to:
+  /// **'顯示原始 JSON'**
+  String get showRaw;
+
+  /// No description provided for @hideRaw.
+  ///
+  /// In zh, this message translates to:
+  /// **'收合原始 JSON'**
+  String get hideRaw;
+
+  /// No description provided for @clicksOnly.
+  ///
+  /// In zh, this message translates to:
+  /// **'只看點擊'**
+  String get clicksOnly;
+
+  /// No description provided for @allSteps.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部步驟'**
+  String get allSteps;
 }
 
 class _AppLocalizationsDelegate

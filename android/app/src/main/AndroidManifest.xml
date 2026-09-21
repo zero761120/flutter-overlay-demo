@@ -1,4 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 錄製檔的內容是其他 App 的畫面文字。把它們放進 app-private 的內部儲存擋住了其他
+         App，但 Android Auto Backup 的預設範圍**正是**內部儲存——不關掉的話資料會被備份到
+         使用者的 Google Drive，也會跟著換機轉移走，等於前門關了後門開著。 -->
 
     <!-- 懸浮窗本體：必須由使用者在系統設定頁手動授權，沒有 runtime dialog 可拿 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -10,7 +15,9 @@
     <application
         android:label="overlay_demo"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        tools:replace="android:allowBackup"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

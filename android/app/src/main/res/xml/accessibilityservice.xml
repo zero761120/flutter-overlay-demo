@@ -2,9 +2,12 @@
 <!--
   無障礙服務設定。canPerformGestures 是模擬點擊（dispatchGesture）的前提，
   沒開的話呼叫會直接回 false、而且不會有任何錯誤訊息。
+
+  事件型別必須含 typeViewClicked，否則只看得到「畫面換了」、看不到「使用者點了什麼」，
+  錄製操作流程時會缺掉最關鍵的那一半。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewLongClicked|typeViewTextChanged|typeViewScrolled|typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="300"
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"

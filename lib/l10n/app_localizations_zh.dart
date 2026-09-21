@@ -109,4 +109,51 @@ class AppLocalizationsZh extends AppLocalizations {
   String logStartClicking(int ms) {
     return '開始連點（間隔 ${ms}ms）';
   }
+
+  @override
+  String get recordFlow => '錄製操作流程';
+
+  @override
+  String recordStop(int n) {
+    return '停止錄製（$n 步）';
+  }
+
+  @override
+  String get logRecordStart => '開始錄製操作流程';
+
+  @override
+  String logRecordSaved(String path, int n) {
+    return '已存檔：$path（$n 步）';
+  }
+
+  @override
+  String get clearRecordings => '清除錄製檔';
+
+  @override
+  String logRecordingsCleared(int n) {
+    return '已清除 $n 份錄製檔';
+  }
+
+  @override
+  String get recordings => '錄製檔';
+
+  @override
+  String get recordingsEmpty => '尚無錄製檔';
+
+  @override
+  String stepsCount(int n) {
+    return '$n 步';
+  }
+
+  @override
+  String get showRaw => '顯示原始 JSON';
+
+  @override
+  String get hideRaw => '收合原始 JSON';
+
+  @override
+  String get clicksOnly => '只看點擊';
+
+  @override
+  String get allSteps => '全部步驟';
 }

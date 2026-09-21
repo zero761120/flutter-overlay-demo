@@ -29,5 +29,18 @@
   "backToApp": "Back to app",
   "pickHint": "Tap where you want the auto tap",
   "logSetTarget": "Tap target set ({x}, {y})",
-  "logStartClicking": "Auto tap started (every {ms}ms)"
+  "logStartClicking": "Auto tap started (every {ms}ms)",
+  "recordFlow": "Record a flow",
+  "recordStop": "Stop recording ({n} steps)",
+  "logRecordStart": "Flow recording started",
+  "logRecordSaved": "Saved: {path} ({n} steps)",
+  "clearRecordings": "Clear recordings",
+  "logRecordingsCleared": "Cleared {n} recording(s)",
+  "recordings": "Recordings",
+  "recordingsEmpty": "No recordings yet",
+  "stepsCount": "{n} steps",
+  "showRaw": "Show raw JSON",
+  "hideRaw": "Hide raw JSON",
+  "clicksOnly": "Taps only",
+  "allSteps": "All steps"
 }

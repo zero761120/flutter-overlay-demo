@@ -13,17 +13,44 @@
   "clear": "清空",
   "actionLogEmpty": "（懸浮球做了什麼會記在這裡）",
   "helloFromApp": "主 App 說哈囉 {time}",
-  "@helloFromApp": { "placeholders": { "time": { "type": "String" } } },
+  "@helloFromApp": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
   "menuTitle": "懸浮選單",
   "targetUnset": "尚未設定點擊位置",
   "targetAt": "點擊位置 ({x}, {y})",
-  "@targetAt": { "placeholders": { "x": { "type": "String" }, "y": { "type": "String" } } },
+  "@targetAt": {
+    "placeholders": {
+      "x": {
+        "type": "String"
+      },
+      "y": {
+        "type": "String"
+      }
+    }
+  },
   "a11yHint": "需先到「設定 → 協助工具」啟用本 App 的無障礙服務",
   "dispatchFailed": "派送失敗：請到「設定 → 協助工具」把本 App 的服務關掉再重新開啟",
   "fromApp": "主 App：{message}",
-  "@fromApp": { "placeholders": { "message": { "type": "String" } } },
+  "@fromApp": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
   "snapEdge": "吸附邊緣：{state}",
-  "@snapEdge": { "placeholders": { "state": { "type": "String" } } },
+  "@snapEdge": {
+    "placeholders": {
+      "state": {
+        "type": "String"
+      }
+    }
+  },
   "on": "開",
   "off": "關",
   "setTarget": "設定點擊位置",
@@ -33,7 +60,66 @@
   "backToApp": "返回 App",
   "pickHint": "點一下要連點的位置",
   "logSetTarget": "設定點擊位置 ({x}, {y})",
-  "@logSetTarget": { "placeholders": { "x": { "type": "String" }, "y": { "type": "String" } } },
+  "@logSetTarget": {
+    "placeholders": {
+      "x": {
+        "type": "String"
+      },
+      "y": {
+        "type": "String"
+      }
+    }
+  },
   "logStartClicking": "開始連點（間隔 {ms}ms）",
-  "@logStartClicking": { "placeholders": { "ms": { "type": "int" } } }
+  "@logStartClicking": {
+    "placeholders": {
+      "ms": {
+        "type": "int"
+      }
+    }
+  },
+  "recordFlow": "錄製操作流程",
+  "recordStop": "停止錄製（{n} 步）",
+  "logRecordStart": "開始錄製操作流程",
+  "logRecordSaved": "已存檔：{path}（{n} 步）",
+  "@recordStop": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "@logRecordSaved": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      },
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "clearRecordings": "清除錄製檔",
+  "logRecordingsCleared": "已清除 {n} 份錄製檔",
+  "@logRecordingsCleared": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "recordings": "錄製檔",
+  "recordingsEmpty": "尚無錄製檔",
+  "stepsCount": "{n} 步",
+  "showRaw": "顯示原始 JSON",
+  "hideRaw": "收合原始 JSON",
+  "clicksOnly": "只看點擊",
+  "allSteps": "全部步驟",
+  "@stepsCount": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  }
 }
