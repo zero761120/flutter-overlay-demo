@@ -156,4 +156,55 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get allSteps => '全部步驟';
+
+  @override
+  String get solveMeowdoku => '解題：貓咪在哪裡';
+
+  @override
+  String get solutionTitle => '解答';
+
+  @override
+  String get solveFailedTitle => '解不出來';
+
+  @override
+  String get solveNoGrid => '畫面上找不到盤面，請在關卡畫面再試一次';
+
+  @override
+  String solveGridMismatch(int rows, int cols) {
+    return '盤面辨識有誤：找到 $rows 行、$cols 列';
+  }
+
+  @override
+  String solveRegionMismatch(int found, int expected) {
+    return '色塊辨識有誤：找到 $found 種顏色，應該是 $expected 種';
+  }
+
+  @override
+  String get solveNoSolution => '照辨識結果無解，可能有顏色讀錯了';
+
+  @override
+  String get solveAmbiguous => '照辨識結果不只一組解，可能有格子讀錯了';
+
+  @override
+  String get screenshotNoAccess =>
+      '無障礙服務尚未就緒（App 更新後常見）：請到「設定 → 協助工具」把本 App 的服務關掉再重新開啟';
+
+  @override
+  String get screenshotTooFrequent => '截圖太頻繁，請稍候再試';
+
+  @override
+  String get screenshotSecure => '這個畫面禁止截圖';
+
+  @override
+  String get screenshotUnsupported => '需要 Android 11 以上';
+
+  @override
+  String screenshotFailed(String reason) {
+    return '截圖失敗：$reason';
+  }
+
+  @override
+  String logSolved(int n) {
+    return '解出 $n×$n 盤面';
+  }
 }

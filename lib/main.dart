@@ -11,8 +11,10 @@ import 'package:flutter_accessibility_service/accessibility_event.dart';
 import 'package:flutter_accessibility_service/constants.dart';
 import 'package:flutter_accessibility_service/flutter_accessibility_service.dart';
 import 'package:flutter_accessibility_service/gesture_description.dart';
+import 'package:flutter_accessibility_service/screen_capture.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:overlay_demo/l10n/app_localizations.dart';
+import 'package:overlay_demo/meowdoku.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// 懸浮球收合後的邊長（dp）。
@@ -54,6 +56,25 @@ const Duration kCollapseRevealDelay = Duration(milliseconds: 300);
 /// 長大；球在右緣時還得橫移將近一個螢幕寬，追趕距離差很多——這就是左右兩側手感不同的
 /// 原因。用同一段延遲把兩邊拉齊。
 const Duration kExpandRevealDelay = Duration(milliseconds: 200);
+
+/// 懸浮層清空後等多久才截圖。
+///
+/// `endOfFrame` 只代表 framework 把空白那一幀送出去了，合成器換上它還要一兩幀；太早拍
+/// 會把面板一起拍進去、壓在盤面上，辨識就會失敗。**未實測**，取約 6 幀的保守值。
+const Duration kCaptureSettleDelay = Duration(milliseconds: 100);
+
+/// 解答小圖裡盤面的邊長（dp），不隨盤面大小變。關卡多半是 8～10 格、最大 12 格：
+/// 固定每格大小的話 8×8 會縮成一小塊，固定整張則格數少時每格自然變大。
+/// 12×12 時每格 13dp，看得清楚又不會擋掉太多畫面。
+const double kSolutionBoardDp = 156;
+const double kSolutionPadDp = 8;
+
+/// 小卡外框寬。尺寸要把它算進去：Border 會吃掉內容區，漏算就是上下各少 1dp 而 overflow。
+const double kSolutionBorderDp = 1;
+const double kSolutionHeaderDp = 20;
+
+/// 解題失敗時那張小卡的尺寸（dp），只放一兩行錯誤訊息。
+const Size kSolveErrorCardDp = Size(200, 110);
 
 /// 一套慣用的藍色主題。
 /// 主色日夜同色，底色與文字分日夜。這裡只搬懸浮球 demo 用得到的那幾個。
@@ -651,7 +672,7 @@ class FloatingBall extends StatefulWidget {
 }
 
 /// 懸浮窗目前的形態，決定視窗要多大、Flutter 要畫什麼。
-enum _BallMode { idle, switching, expanded }
+enum _BallMode { idle, switching, expanded, solution }
 
 class _FloatingBallState extends State<FloatingBall>
     with WidgetsBindingObserver {
@@ -702,6 +723,14 @@ class _FloatingBallState extends State<FloatingBall>
 
   String? _lastFromApp;
   StreamSubscription<dynamic>? _sub;
+
+  /// 最近一次 MeowDoku 的盤面與答案。只留色塊編號與顏色——截圖的像素讀完就丟，
+  /// 不落檔，也不留在記憶體裡。
+  MeowdokuBoard? _board;
+  List<int>? _solution;
+
+  /// 解題失敗的原因；有值時小卡改顯示這段文字。
+  String? _solveError;
 
   Size get _screen => screenSizeDp();
 
@@ -841,6 +870,120 @@ class _FloatingBallState extends State<FloatingBall>
       return;
     }
     _report(label);
+  }
+
+  // ── 解 MeowDoku ──
+
+  Future<void> _solveMeowdoku() async {
+    final AppLocalizations l10n = _l10n;
+    // 面板與球都會被拍進去，而面板正好壓在盤面那個高度。展開時視窗是全螢幕、錨在
+    // (0,0)，切到「什麼都不畫」就是一整片透明——直接拍，省掉先收合再拍那一輪搬移。
+    setState(() => _mode = _BallMode.switching);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(kCaptureSettleDelay);
+    MeowdokuBoard? board;
+    List<int>? solution;
+    String? error;
+    // 截圖是實體像素、視窗座標是 dp；解出盤面後要把小卡擺在盤面旁邊，得換算。
+    double scale = 1;
+    try {
+      final ScreenCapture shot =
+          await FlutterAccessibilityService.takeScreenshot();
+      scale = shot.width / _screen.width;
+      board = readMeowdokuBoard(
+        shot.pixels,
+        width: shot.width,
+        height: shot.height,
+        rowBytes: shot.rowBytes,
+      );
+      final List<List<int>> solutions = solveMeowdoku(board.regions);
+      if (solutions.isEmpty) {
+        error = l10n.solveNoSolution;
+      } else if (solutions.length > 1) {
+        error = l10n.solveAmbiguous;
+      } else {
+        solution = solutions.single;
+      }
+    } on PlatformException catch (e) {
+      error = switch (e.code) {
+        // 兩者處置相同：重裝 App 後服務常是「列為啟用但沒連上」，而新加的
+        // canTakeScreenshot 也要服務重新綁定、系統重讀 XML 才生效。
+        'NO_ACCESS' || 'NOT_CONNECTED' => l10n.screenshotNoAccess,
+        'TOO_FREQUENT' => l10n.screenshotTooFrequent,
+        'SECURE_WINDOW' => l10n.screenshotSecure,
+        'UNSUPPORTED' => l10n.screenshotUnsupported,
+        _ => l10n.screenshotFailed('${e.code} ${e.message ?? ''}'),
+      };
+    } on MeowdokuReadException catch (e) {
+      error = switch (e.failure) {
+        MeowdokuReadFailure.noGrid => l10n.solveNoGrid,
+        MeowdokuReadFailure.gridMismatch => l10n.solveGridMismatch(
+          e.expected ?? 0,
+          e.found ?? 0,
+        ),
+        MeowdokuReadFailure.regionMismatch => l10n.solveRegionMismatch(
+          e.found ?? 0,
+          e.expected ?? 0,
+        ),
+      };
+    } catch (e) {
+      // 其餘例外（MissingPluginException、回傳型別不符…）也一定要走到下面把視窗收掉：
+      // 停在 switching 的話，全螢幕的透明視窗會吃掉所有點擊，看起來像整台卡死。
+      error = l10n.screenshotFailed('$e');
+    }
+    if (!mounted) return;
+    _board = error == null ? board : null;
+    _solution = error == null ? solution : null;
+    _solveError = error;
+    _report(error ?? l10n.logSolved(board!.size));
+    try {
+      await _showSolutionCard(board, scale);
+    } catch (e) {
+      // 換尺寸失敗就退回成球，理由同上。
+      debugPrint('solution card failed: $e');
+      if (mounted) await _collapse();
+    }
+  }
+
+  /// 把視窗縮成小卡、擺到盤面旁邊。呼叫時視窗必須是 switching（什麼都不畫），
+  /// 理由同 [_expand]：改尺寸時 Android 會拉伸舊內容。
+  Future<void> _showSolutionCard(MeowdokuBoard? board, double scale) async {
+    final Size screen = _screen;
+    final Size card = _solveError == null && board != null
+        ? const Size(
+            kSolutionBoardDp + (kSolutionPadDp + kSolutionBorderDp) * 2,
+            kSolutionBoardDp +
+                (kSolutionPadDp + kSolutionBorderDp) * 2 +
+                kSolutionHeaderDp,
+          )
+        : kSolveErrorCardDp;
+    final double x = _onRight ? screen.width - card.width : 0;
+    double y;
+    if (_solveError == null && board != null) {
+      // 優先放盤面正下方，放不下才放上方：蓋到盤面就失去「對照著填」的意義了。
+      final double below = board.bottom / scale + 8;
+      final double above = board.top / scale - 8 - card.height;
+      y = below + card.height <= screen.height - 12 ? below : above;
+    } else {
+      y = _ballAtExpand.dy + kBallDp - card.height;
+    }
+    // clamp 的上界比下界小會丟 ArgumentError（螢幕高不到卡片 + 24dp 時）。
+    final double maxY = screen.height - card.height - 12;
+    y = maxY < 12 ? 12 : y.clamp(12.0, maxY);
+    // 開放原生拖曳：擺的位置不一定剛好，蓋到要看的地方時可以自己挪開。
+    await Future.wait(<Future<void>>[
+      _callOverlay(
+        () => FlutterOverlayWindow.resizeOverlay(
+          card.width.ceil(),
+          card.height.ceil(),
+          true,
+        ),
+      ),
+      _moveWindow(x.round(), y.round()),
+    ]);
+    await Future<void>.delayed(kCollapseRevealDelay);
+    if (!mounted) return;
+    setState(() => _mode = _BallMode.solution);
   }
 
   // ── 錄製操作流程 ──
@@ -1131,7 +1274,71 @@ class _FloatingBallState extends State<FloatingBall>
         return const SizedBox.shrink();
       case _BallMode.expanded:
         return _buildExpanded();
+      case _BallMode.solution:
+        return _buildSolution();
     }
+  }
+
+  /// 解答小卡：點一下任何地方就收回成球。
+  Widget _buildSolution() {
+    final MeowdokuBoard? board = _board;
+    final List<int>? solution = _solution;
+    final String? error = _solveError;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: _collapse,
+      child: Container(
+        padding: const EdgeInsets.all(kSolutionPadDp),
+        // 不加陰影：視窗跟卡片一樣大，陰影會被視窗邊界切掉。
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.96),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: scheme.outlineVariant,
+            width: kSolutionBorderDp,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            SizedBox(
+              height: kSolutionHeaderDp,
+              child: Row(
+                children: <Widget>[
+                  Text(
+                    error == null ? _l10n.solutionTitle : _l10n.solveFailedTitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  const Icon(Icons.close, size: 16),
+                ],
+              ),
+            ),
+            if (error != null || board == null || solution == null)
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Text(
+                    error ?? '',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                ),
+              )
+            else
+              // 填滿剩下的空間而不是寫死 kSolutionBoardDp：視窗尺寸是 dp 換成整數 px，
+              // 捨入後可能比算的小零點幾個像素，寫死就會 overflow。
+              Expanded(
+                child: CustomPaint(painter: _MiniBoardPainter(board, solution)),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildExpanded() {
@@ -1348,6 +1555,11 @@ class _FloatingBallState extends State<FloatingBall>
                   ),
                   _PanelButton(label: _l10n.screenshot, onTap: _takeScreenshot),
                   _PanelButton(
+                    label: _l10n.solveMeowdoku,
+                    filled: true,
+                    onTap: _solveMeowdoku,
+                  ),
+                  _PanelButton(
                     label: _recording
                         ? _l10n.recordStop(_steps.length)
                         : _l10n.recordFlow,
@@ -1368,6 +1580,43 @@ class _FloatingBallState extends State<FloatingBall>
       ),
     );
   }
+}
+
+/// 縮小版盤面：沿用遊戲的色塊配色，貓的位置畫成白邊深色圓點，任何底色上都看得清楚。
+class _MiniBoardPainter extends CustomPainter {
+  _MiniBoardPainter(this.board, this.solution);
+
+  final MeowdokuBoard board;
+  final List<int> solution;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double cell = size.shortestSide / board.size;
+    final Paint fill = Paint();
+    for (int r = 0; r < board.size; r++) {
+      for (int c = 0; c < board.size; c++) {
+        fill.color = Color(board.regionColors[board.regions[r][c]]);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(c * cell + 0.5, r * cell + 0.5, cell - 1, cell - 1),
+            const Radius.circular(2),
+          ),
+          fill,
+        );
+      }
+    }
+    final Paint ring = Paint()..color = Colors.white;
+    final Paint dot = Paint()..color = const Color(0xFF222222);
+    for (int r = 0; r < solution.length; r++) {
+      final Offset center = Offset((solution[r] + 0.5) * cell, (r + 0.5) * cell);
+      canvas.drawCircle(center, cell * 0.34, ring);
+      canvas.drawCircle(center, cell * 0.24, dot);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_MiniBoardPainter oldDelegate) =>
+      oldDelegate.board != board || oldDelegate.solution != solution;
 }
 
 class _PanelNote extends StatelessWidget {

@@ -355,6 +355,90 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'全部步驟'**
   String get allSteps;
+
+  /// No description provided for @solveMeowdoku.
+  ///
+  /// In zh, this message translates to:
+  /// **'解題：貓咪在哪裡'**
+  String get solveMeowdoku;
+
+  /// No description provided for @solutionTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'解答'**
+  String get solutionTitle;
+
+  /// No description provided for @solveFailedTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'解不出來'**
+  String get solveFailedTitle;
+
+  /// No description provided for @solveNoGrid.
+  ///
+  /// In zh, this message translates to:
+  /// **'畫面上找不到盤面，請在關卡畫面再試一次'**
+  String get solveNoGrid;
+
+  /// No description provided for @solveGridMismatch.
+  ///
+  /// In zh, this message translates to:
+  /// **'盤面辨識有誤：找到 {rows} 行、{cols} 列'**
+  String solveGridMismatch(int rows, int cols);
+
+  /// No description provided for @solveRegionMismatch.
+  ///
+  /// In zh, this message translates to:
+  /// **'色塊辨識有誤：找到 {found} 種顏色，應該是 {expected} 種'**
+  String solveRegionMismatch(int found, int expected);
+
+  /// No description provided for @solveNoSolution.
+  ///
+  /// In zh, this message translates to:
+  /// **'照辨識結果無解，可能有顏色讀錯了'**
+  String get solveNoSolution;
+
+  /// No description provided for @solveAmbiguous.
+  ///
+  /// In zh, this message translates to:
+  /// **'照辨識結果不只一組解，可能有格子讀錯了'**
+  String get solveAmbiguous;
+
+  /// No description provided for @screenshotNoAccess.
+  ///
+  /// In zh, this message translates to:
+  /// **'無障礙服務尚未就緒（App 更新後常見）：請到「設定 → 協助工具」把本 App 的服務關掉再重新開啟'**
+  String get screenshotNoAccess;
+
+  /// No description provided for @screenshotTooFrequent.
+  ///
+  /// In zh, this message translates to:
+  /// **'截圖太頻繁，請稍候再試'**
+  String get screenshotTooFrequent;
+
+  /// No description provided for @screenshotSecure.
+  ///
+  /// In zh, this message translates to:
+  /// **'這個畫面禁止截圖'**
+  String get screenshotSecure;
+
+  /// No description provided for @screenshotUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'需要 Android 11 以上'**
+  String get screenshotUnsupported;
+
+  /// No description provided for @screenshotFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'截圖失敗：{reason}'**
+  String screenshotFailed(String reason);
+
+  /// No description provided for @logSolved.
+  ///
+  /// In zh, this message translates to:
+  /// **'解出 {n}×{n} 盤面'**
+  String logSolved(int n);
 }
 
 class _AppLocalizationsDelegate

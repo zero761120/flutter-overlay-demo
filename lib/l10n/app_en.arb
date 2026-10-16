@@ -42,5 +42,19 @@
   "showRaw": "Show raw JSON",
   "hideRaw": "Hide raw JSON",
   "clicksOnly": "Taps only",
-  "allSteps": "All steps"
+  "allSteps": "All steps",
+  "solveMeowdoku": "Solve MeowDoku",
+  "solutionTitle": "Solution",
+  "solveFailedTitle": "Couldn't solve",
+  "solveNoGrid": "No puzzle grid on screen. Try again on a level screen.",
+  "solveGridMismatch": "Grid misread: found {rows} rows and {cols} columns",
+  "solveRegionMismatch": "Regions misread: found {found} colors, expected {expected}",
+  "solveNoSolution": "No solution for the board as read; a color was likely misread",
+  "solveAmbiguous": "More than one solution for the board as read; a cell was likely misread",
+  "screenshotNoAccess": "Accessibility service not ready (common right after an app update): in Settings → Accessibility, turn this app's service off and on again",
+  "screenshotTooFrequent": "Screenshots too frequent, try again shortly",
+  "screenshotSecure": "This screen blocks screenshots",
+  "screenshotUnsupported": "Requires Android 11 or later",
+  "screenshotFailed": "Screenshot failed: {reason}",
+  "logSolved": "Solved a {n}×{n} board"
 }

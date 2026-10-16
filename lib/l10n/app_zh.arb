@@ -115,6 +115,54 @@
   "hideRaw": "收合原始 JSON",
   "clicksOnly": "只看點擊",
   "allSteps": "全部步驟",
+  "solveMeowdoku": "解題：貓咪在哪裡",
+  "solutionTitle": "解答",
+  "solveFailedTitle": "解不出來",
+  "solveNoGrid": "畫面上找不到盤面，請在關卡畫面再試一次",
+  "solveGridMismatch": "盤面辨識有誤：找到 {rows} 行、{cols} 列",
+  "@solveGridMismatch": {
+    "placeholders": {
+      "rows": {
+        "type": "int"
+      },
+      "cols": {
+        "type": "int"
+      }
+    }
+  },
+  "solveRegionMismatch": "色塊辨識有誤：找到 {found} 種顏色，應該是 {expected} 種",
+  "@solveRegionMismatch": {
+    "placeholders": {
+      "found": {
+        "type": "int"
+      },
+      "expected": {
+        "type": "int"
+      }
+    }
+  },
+  "solveNoSolution": "照辨識結果無解，可能有顏色讀錯了",
+  "solveAmbiguous": "照辨識結果不只一組解，可能有格子讀錯了",
+  "screenshotNoAccess": "無障礙服務尚未就緒（App 更新後常見）：請到「設定 → 協助工具」把本 App 的服務關掉再重新開啟",
+  "screenshotTooFrequent": "截圖太頻繁，請稍候再試",
+  "screenshotSecure": "這個畫面禁止截圖",
+  "screenshotUnsupported": "需要 Android 11 以上",
+  "screenshotFailed": "截圖失敗：{reason}",
+  "@screenshotFailed": {
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "logSolved": "解出 {n}×{n} 盤面",
+  "@logSolved": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "@stepsCount": {
     "placeholders": {
       "n": {

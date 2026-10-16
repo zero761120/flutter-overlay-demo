@@ -158,4 +158,59 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get allSteps => 'All steps';
+
+  @override
+  String get solveMeowdoku => 'Solve MeowDoku';
+
+  @override
+  String get solutionTitle => 'Solution';
+
+  @override
+  String get solveFailedTitle => 'Couldn\'t solve';
+
+  @override
+  String get solveNoGrid =>
+      'No puzzle grid on screen. Try again on a level screen.';
+
+  @override
+  String solveGridMismatch(int rows, int cols) {
+    return 'Grid misread: found $rows rows and $cols columns';
+  }
+
+  @override
+  String solveRegionMismatch(int found, int expected) {
+    return 'Regions misread: found $found colors, expected $expected';
+  }
+
+  @override
+  String get solveNoSolution =>
+      'No solution for the board as read; a color was likely misread';
+
+  @override
+  String get solveAmbiguous =>
+      'More than one solution for the board as read; a cell was likely misread';
+
+  @override
+  String get screenshotNoAccess =>
+      'Accessibility service not ready (common right after an app update): in Settings → Accessibility, turn this app\'s service off and on again';
+
+  @override
+  String get screenshotTooFrequent =>
+      'Screenshots too frequent, try again shortly';
+
+  @override
+  String get screenshotSecure => 'This screen blocks screenshots';
+
+  @override
+  String get screenshotUnsupported => 'Requires Android 11 or later';
+
+  @override
+  String screenshotFailed(String reason) {
+    return 'Screenshot failed: $reason';
+  }
+
+  @override
+  String logSolved(int n) {
+    return 'Solved a $n×$n board';
+  }
 }
