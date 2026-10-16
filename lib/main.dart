@@ -732,7 +732,11 @@ class _FloatingBallState extends State<FloatingBall>
   /// 解題失敗的原因；有值時小卡改顯示這段文字。
   String? _solveError;
 
-  Size get _screen => screenSizeDp();
+  /// 最近一次向原生問到的螢幕尺寸（dp）。還沒問到之前沿用 [screenSizeDp]——引擎剛建立
+  /// 時那個值是對的，只是之後不會跟著轉向更新（理由見 [_refreshScreen]）。
+  Size? _screenDp;
+
+  Size get _screen => _screenDp ?? screenSizeDp();
 
   AppLocalizations get _l10n => AppLocalizations.of(context)!;
 
@@ -889,6 +893,7 @@ class _FloatingBallState extends State<FloatingBall>
     try {
       final ScreenCapture shot =
           await FlutterAccessibilityService.takeScreenshot();
+      await _refreshScreen();
       scale = shot.width / _screen.width;
       board = readMeowdokuBoard(
         shot.pixels,
@@ -948,6 +953,7 @@ class _FloatingBallState extends State<FloatingBall>
   /// 把視窗縮成小卡、擺到盤面旁邊。呼叫時視窗必須是 switching（什麼都不畫），
   /// 理由同 [_expand]：改尺寸時 Android 會拉伸舊內容。
   Future<void> _showSolutionCard(MeowdokuBoard? board, double scale) async {
+    await _refreshScreen();
     final Size screen = _screen;
     final Size card = _solveError == null && board != null
         ? const Size(
@@ -1155,8 +1161,9 @@ class _FloatingBallState extends State<FloatingBall>
 
   Future<void> _startSnap() async {
     _snapTimer?.cancel();
-    final Size screen = _screen;
     final OverlayPosition pos = await FlutterOverlayWindow.getOverlayPosition();
+    await _refreshScreen();
+    final Size screen = _screen;
     if (!mounted || _mode != _BallMode.idle) return;
     final double destX = pos.x + kBallDp / 2 > screen.width / 2
         ? screen.width - kBallDp
@@ -1181,6 +1188,8 @@ class _FloatingBallState extends State<FloatingBall>
     // 吸附還在跑的話先停掉，否則它跟下面搬視窗的呼叫會搶同一組 LayoutParams。
     _snapTimer?.cancel();
     final OverlayPosition pos = await FlutterOverlayWindow.getOverlayPosition();
+    // 展開後的面板版面（靠哪邊、高度上限）在 build 裡同步讀 _screen，得在這裡先更新。
+    await _refreshScreen();
     _ballAtExpand = Offset(pos.x, pos.y);
     // 搬視窗與改尺寸是兩個原生呼叫，落在不同幀時中間會出現「已經搬走但還沒放大」這類
     // 半成品狀態，畫出來就像在滑動。切換期間索性什麼都不畫（見 build 的 switching），
@@ -1213,6 +1222,11 @@ class _FloatingBallState extends State<FloatingBall>
   }
 
   Future<void> _collapse() async {
+    // 先切成 switching、之後才 await：等待期間面板若還畫著、點得到，連點兩下就會疊出
+    // 兩次收合。
+    setState(() => _mode = _BallMode.switching);
+    await _refreshScreen();
+    if (!mounted) return;
     // 原生的吸附動畫關掉了，改在這裡自己吸附：收合本來就要指定落點，順手貼到最近的邊。
     // 吸附關掉時就原地放回去，不要偷偷把球挪走。
     final int x = _snapEnabled
@@ -1220,7 +1234,6 @@ class _FloatingBallState extends State<FloatingBall>
         : _ballAtExpand.dx.round();
     final int y = _ballAtExpand.dy.round();
     _ballAtExpand = Offset(x.toDouble(), y.toDouble());
-    setState(() => _mode = _BallMode.switching);
     // 讓「什麼都不畫」這一幀真的被光柵化，再去動視窗。
     //
     // Android 在視窗改變大小時，會把既有的 surface 內容**拉伸到新的邊界**，直到新的
@@ -1236,6 +1249,39 @@ class _FloatingBallState extends State<FloatingBall>
     await Future<void>.delayed(kCollapseRevealDelay);
     if (!mounted) return;
     setState(() => _mode = _BallMode.idle);
+  }
+
+  /// 向原生要目前的螢幕尺寸，更新 [_screenDp]。
+  ///
+  /// 不能只靠 [screenSizeDp]：懸浮層引擎掛在 Service 底下、沒有 Activity，而 Flutter
+  /// embedding 只在找得到 Activity 時才把螢幕尺寸送進引擎（Flutter 3.38.10 / engine
+  /// cafcda5721 的 ViewUtils.calculateMaximumDisplayMetrics 反組譯確認），所以
+  /// `display.size` 會停在引擎建立當下的方向。實測引擎在橫向建立、轉回直向後，吸右門檻（球心過半寬）變成
+  /// 487dp，直向卻最寬只有 417dp，往右拖一律吸回左邊；反過來直向建立、轉橫向，則會吸到
+  /// 畫面中間。轉向時 Dart 這側也收不到通知（見 OverlayService.onConfigurationChanged
+  /// 的註解），所以在每個要用到尺寸的動作開頭現問一次，而不是等推播。
+  /// 問不到（channel 正在重新掛載等）就沿用上一個值。
+  Future<void> _refreshScreen() async {
+    // 一律接住、沿用舊值：這裡失敗只是吸邊方向可能判錯，不值得讓展開／收合整段中斷。
+    try {
+      final Map<dynamic, dynamic>? px = await _selfChannel
+          .invokeMapMethod<dynamic, dynamic>('getScreenSize');
+      if (px == null) return;
+      // 跟 screenSizeDp 同一套換算：dpr 不隨轉向改變，兩邊才對得起來。
+      final double dpr = WidgetsBinding
+          .instance
+          .platformDispatcher
+          .views
+          .first
+          .display
+          .devicePixelRatio;
+      _screenDp = Size(
+        (px['width'] as int) / dpr,
+        (px['height'] as int) / dpr,
+      );
+    } catch (e) {
+      debugPrint('getScreenSize failed: $e');
+    }
   }
 
   /// 重新掛載當下 channel 可能還沒人接，短暫重試而不是讓例外中斷整個流程。

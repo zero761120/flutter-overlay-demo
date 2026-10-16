@@ -140,6 +140,8 @@ public class OverlayService extends Service implements View.OnTouchListener {
                 int height = call.argument("height");
                 boolean enableDrag = call.argument("enableDrag");
                 resizeOverlay(width, height, enableDrag, result);
+            } else if (call.method.equals("getScreenSize")) {
+                result.success(currentScreenSizePx());
             }
         });
         overlayMessageChannel.setMessageHandler((message, reply) -> {
@@ -214,6 +216,26 @@ public class OverlayService extends Service implements View.OnTouchListener {
         params.x = clampedX;
         params.y = clampedY;
         windowManager.updateViewLayout(flutterView, params);
+    }
+
+    // LOCAL PATCH: the overlay engine's `Display.size` is frozen at the orientation it was created
+    // in. The embedding only pushes display metrics when it can find an Activity
+    // (ViewUtils.calculateMaximumDisplayMetrics returns early otherwise — read from the
+    // disassembled embedding of Flutter 3.38.10 / engine cafcda5721), and this engine lives
+    // under a Service. Measured: engine created in landscape, rotated back to portrait, Dart still
+    // saw 975dp wide, so "snap right past half the width" could never trigger. Dart asks here
+    // instead. Real metrics (full display incl. system bars) to match what Display.size meant.
+    // A fresh WindowManager rather than the field: the field is null after closeOverlay, while the
+    // cached engine — and its Dart code — keeps running.
+    @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
+    private Map<String, Integer> currentScreenSizePx() {
+        WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        DisplayMetrics dm = new DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(dm);
+        Map<String, Integer> size = new HashMap<>();
+        size.put("width", dm.widthPixels);
+        size.put("height", dm.heightPixels);
+        return size;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
