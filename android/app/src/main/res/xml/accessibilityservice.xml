@@ -5,6 +5,12 @@
 
   事件型別必須含 typeViewClicked，否則只看得到「畫面換了」、看不到「使用者點了什麼」，
   錄製操作流程時會缺掉最關鍵的那一半。
+
+  canTakeScreenshot 讓服務能直接拿到畫面像素（takeScreenshot，API 30+）。沒宣告的話
+  呼叫會被拒（依 review 讀 AOSP 是當場丟 SecurityException，未在實機重現），原生端
+  一律轉成 NO_ACCESS。系統截圖那條 global action 只會把檔案丟進相簿，App 讀不回來。
+  系統是在綁定服務時讀這份 XML；重裝後重新綁定，實機 dumpsys 看到 capabilities=161
+  （含 CAN_TAKE_SCREENSHOT=128）。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewLongClicked|typeViewTextChanged|typeViewScrolled|typeViewFocused"
@@ -12,4 +18,5 @@
     android:notificationTimeout="300"
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
-    android:canPerformGestures="true" />
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true" />

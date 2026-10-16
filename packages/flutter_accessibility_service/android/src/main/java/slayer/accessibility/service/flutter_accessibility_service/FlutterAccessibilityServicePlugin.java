@@ -205,6 +205,13 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
             }
             List<Object> strokes = call.argument("strokes");
             AccessibilityListener.performDispatchGesture(strokes, result);
+        } else if (call.method.equals("takeScreenshot")) {
+            // LOCAL PATCH: see AccessibilityListener.performTakeScreenshot.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                result.error("UNSUPPORTED", "takeScreenshot requires Android 11 (API 30)", null);
+                return;
+            }
+            AccessibilityListener.performTakeScreenshot(result);
         } else {
             result.notImplemented();
         }

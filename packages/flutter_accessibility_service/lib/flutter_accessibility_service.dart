@@ -9,6 +9,7 @@ import 'package:flutter_accessibility_service/constants.dart';
 
 import 'config/overlay_config.dart';
 import 'gesture_description.dart';
+import 'screen_capture.dart';
 
 class FlutterAccessibilityService {
   FlutterAccessibilityService._();
@@ -223,5 +224,20 @@ class FlutterAccessibilityService {
       log("$error");
       return false;
     }
+  }
+
+  /// LOCAL PATCH: captures the default display and returns its pixels (Android 11+).
+  ///
+  /// Unlike the rest of this class, failures are **not** swallowed: the caller needs the
+  /// [PlatformException.code] to say something actionable — `NO_ACCESS` (service XML lacks
+  /// `canTakeScreenshot`, or the system hasn't re-read it yet), `TOO_FREQUENT` (the system
+  /// enforces a minimum interval), `SECURE_WINDOW`, `NOT_CONNECTED`, `UNSUPPORTED`.
+  static Future<ScreenCapture> takeScreenshot() async {
+    final Map<dynamic, dynamic>? map =
+        await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('takeScreenshot');
+    if (map == null) {
+      throw PlatformException(code: 'FAILED', message: 'empty result');
+    }
+    return ScreenCapture.fromMap(map);
   }
 }

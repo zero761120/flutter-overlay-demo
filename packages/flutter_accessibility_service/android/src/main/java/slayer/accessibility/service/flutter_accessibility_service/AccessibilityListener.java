@@ -8,15 +8,18 @@ import android.accessibilityservice.GestureDescription;
 import android.annotation.TargetApi;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.hardware.HardwareBuffer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.util.LruCache;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
@@ -28,6 +31,7 @@ import androidx.annotation.RequiresApi;
 
 import com.google.gson.Gson;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -411,6 +415,93 @@ public class AccessibilityListener extends AccessibilityService {
             Log.e("GESTURE", "performDispatchGesture: " + e.getMessage());
             result.success(false);
         }
+    }
+
+    /// LOCAL PATCH: upstream has no way to get pixels back. GLOBAL_ACTION_TAKE_SCREENSHOT only
+    /// drops a file into the gallery (and shows the system screenshot UI), so the app can't read
+    /// what it just captured. takeScreenshot (API 30+) hands the buffer straight to us without a
+    /// MediaProjection consent dialog — but only if the service XML declares canTakeScreenshot.
+    ///
+    /// Returns tightly-packed-per-row RGBA bytes plus the geometry to index them. Raw instead of
+    /// PNG: encoding a full-resolution frame costs a few hundred ms, and the only consumer
+    /// decodes it straight back to pixels anyway.
+    private static final java.util.concurrent.ExecutorService SCREENSHOT_EXECUTOR =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    @RequiresApi(api = Build.VERSION_CODES.R)
+    public static void performTakeScreenshot(MethodChannel.Result result) {
+        if (instance == null) {
+            result.error("NOT_CONNECTED", "accessibility service is not bound", null);
+            return;
+        }
+        final Handler main = new Handler(Looper.getMainLooper());
+        // The copy below is ~10MB of memcpy; keep it off the main thread, and only come back to
+        // it for Result, which must be called there.
+        try {
+            takeScreenshotOn(instance, main, result);
+        } catch (SecurityException e) {
+            // A service without the screenshot capability is rejected synchronously here rather
+            // than through onFailure (per a review reading of AOSP; not reproduced on a device).
+            // Same remedy as NO_ACCESS: the system must re-read the service XML.
+            result.error("NO_ACCESS", e.getMessage(), null);
+        }
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.R)
+    private static void takeScreenshotOn(AccessibilityListener service, Handler main, MethodChannel.Result result) {
+        service.takeScreenshot(Display.DEFAULT_DISPLAY, SCREENSHOT_EXECUTOR, new TakeScreenshotCallback() {
+            @Override
+            public void onSuccess(ScreenshotResult shot) {
+                final HardwareBuffer buffer = shot.getHardwareBuffer();
+                try {
+                    final Bitmap hardware = Bitmap.wrapHardwareBuffer(buffer, shot.getColorSpace());
+                    if (hardware == null) {
+                        main.post(() -> result.error("DECODE_FAILED", "wrapHardwareBuffer returned null", null));
+                        return;
+                    }
+                    // Hardware bitmaps can't be read back directly; a software copy can.
+                    final Bitmap software = hardware.copy(Bitmap.Config.ARGB_8888, false);
+                    hardware.recycle();
+                    final ByteBuffer pixels = ByteBuffer.allocate(software.getByteCount());
+                    software.copyPixelsToBuffer(pixels);
+                    final Map<String, Object> out = new HashMap<>();
+                    out.put("width", software.getWidth());
+                    out.put("height", software.getHeight());
+                    out.put("rowBytes", software.getRowBytes());
+                    out.put("pixels", pixels.array());
+                    software.recycle();
+                    main.post(() -> result.success(out));
+                } catch (Throwable e) {
+                    // Throwable, not Exception: two ~10MB buffers per call make OutOfMemoryError a
+                    // real possibility, and uncaught on this executor thread it kills the process.
+                    Log.e("SCREENSHOT", "performTakeScreenshot: " + e.getMessage());
+                    main.post(() -> result.error("DECODE_FAILED", e.getMessage(), null));
+                } finally {
+                    buffer.close();
+                }
+            }
+
+            @Override
+            public void onFailure(int errorCode) {
+                final String code;
+                switch (errorCode) {
+                    case ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS:
+                        // The system refused access (an AppOps-level check, per the same review);
+                        // a missing capability takes the SecurityException path above instead.
+                        code = "NO_ACCESS";
+                        break;
+                    case ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT:
+                        code = "TOO_FREQUENT";
+                        break;
+                    case ERROR_TAKE_SCREENSHOT_SECURE_WINDOW:
+                        code = "SECURE_WINDOW";
+                        break;
+                    default:
+                        code = "FAILED";
+                }
+                main.post(() -> result.error(code, "takeScreenshot errorCode=" + errorCode, null));
+            }
+        });
     }
 
 
