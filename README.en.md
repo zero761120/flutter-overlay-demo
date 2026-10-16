@@ -5,8 +5,9 @@
 A Flutter spike for an Android floating ball (AssistiveTouch-like). Personal use, not a product.
 
 The ball is draggable and snaps to the nearest edge (toggleable); tapping it opens a menu with:
-set tap target, start/stop auto tap (300ms interval), screenshot, **record a flow**, clear
-recordings, back to app. Whatever the overlay does is reported back to the host app and listed
+set tap target, start/stop auto tap (300ms interval), screenshot, **solve MeowDoku**, **record a
+flow**, clear recordings, back to app. Whatever the overlay does is reported back to the host app
+and listed
 there. Theme and locale follow the system (light/dark, Chinese/English); colors follow a blue
 theme reused from another project.
 
@@ -51,6 +52,49 @@ adb exec-out run-as com.louis.overlay_demo ls app_flutter/
 adb exec-out run-as com.louis.overlay_demo cat app_flutter/flow-<timestamp>.json > flow.json
 ```
 
+## Solving MeowDoku
+
+The rules: an N×N board split into N colored regions; place one cat in every row, every column
+and every region, and no two cats may touch — **diagonals included** (counting only up/down/
+left/right would make that rule meaningless, since one cat per row and column already guarantees
+it).
+
+The game is drawn by the Godot engine: its accessibility tree is a single empty container with no
+cells in it, so the only option is to read pixels:
+
+1. Panel → "Solve MeowDoku". The overlay first clears itself to transparent, otherwise the panel
+   would sit on top of the board and end up in the capture
+2. The accessibility service's `takeScreenshot` (Android 11+) returns the pixels directly: **no
+   MediaProjection consent dialog, nothing in the gallery, nothing written to disk**
+3. Finding the board: plot "how many colored pixels per row / per column"; the board shows up as a
+   run of equally sized, equally spaced plateaus. N is measured from the screen, so 8–12 cell
+   levels all work
+4. Reading regions: each cell is sampled at 8 points around its rim, white (X marks, cat faces) and
+   black (cat fur) samples are dropped, and the rest vote — boards played halfway with X marks
+   everywhere, and the game's pattern mode, both read fine
+5. Row-by-row backtracking. **A second solution means the board was misread**: when one cell lands
+   in a neighbouring region, the number of colors stays the same and the earlier checks cannot
+   tell; measured on the level-10 board, 42 of the 162 single-cell misreads give a wrong answer if
+   only the first solution is taken, and every one of those 42 has more than one solution
+6. The window shrinks to a small card placed right below the board (above it if there is no
+   room), on the same side as the ball; it can be dragged, and a tap turns it back into the ball
+
+Verified on a real device (Android 15): a fresh 12×12 daily challenge, and level 1642 (10×10)
+played down to its last cat in both normal and pattern mode — every answer matched the in-game
+solution; the game's home screen correctly reports that no board was found.
+
+The reader is tuned to this game's look (light background, white gaps, flat-colored cells); a
+different theme or a different game is not guaranteed to work. When reading fails, the card says
+why (no board, row/column count mismatch, region count mismatch, no solution, more than one
+solution) instead of making up an answer.
+
+**When testing**: reading the UI with uiautomator (mobile-mcp's element listing included) connects
+a UiAutomation, and while it is connected Android **suspends every accessibility service** — the
+settings screen still says "enabled", but the screenshot reports that the service is not ready.
+mobile-mcp leaves `com.mobilenext.mobilecli.DeviceServer` running on the device for 30 minutes of
+idle time; `adb shell kill` it and the service rebinds on its own within a second or two. Driving
+the device with `adb shell input` + `adb exec-out screencap` avoids the problem altogether.
+
 ## Before you use it
 
 This tool requests two high-privilege permissions (overlay window, accessibility service), can
@@ -63,8 +107,10 @@ service's terms of use is on you.
 A few things are done on the privacy side: every capture path skips nodes where `isPassword()`
 is true; recordings go to app-private internal storage rather than external; `allowBackup` is
 off — Auto Backup's default scope **is** internal storage, so leaving it on would close the front
-door and leave the back one open; and event payloads travel through an in-process queue rather
-than a system broadcast, so no other app can passively receive them.
+door and leave the back one open; event payloads travel through an in-process queue rather
+than a system broadcast, so no other app can passively receive them; and the solver's screenshot
+lives in memory only until the board has been read — all that is kept is the region map and its
+colors, and nothing is written to disk.
 
 The author accepts no liability for how it is used (see `LICENSE`).
 
@@ -75,7 +121,8 @@ This project is MIT (see `LICENSE`).
 The two packages under `packages/` are **modified copies** of third-party code, originally by
 Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Every change is
 marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
-These fixes address genuine upstream defects.
+The fixes address genuine upstream defects or limitations upstream does not handle; there is
+also one added feature (a screenshot that returns pixels), likewise listed in the next section.
 
 The `flutter_accessibility_service` ones have been reported upstream:
 
@@ -84,7 +131,7 @@ The `flutter_accessibility_service` ones have been reported upstream:
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — the five capture
   defects, plus two architectural findings where no fix is proposed
 
-The two `flutter_overlay_window` ones were not reported: upstream's last release was 2025-04,
+None of the `flutter_overlay_window` ones were reported: upstream's last release was 2025-04,
 roughly 17 months ago.
 
 ## Locally patched third-party packages
@@ -108,6 +155,15 @@ is only 1033 tall — the ball ends up entirely off-screen and unreachable. Adde
 the ball's own window is a fixed 48dp and its viewport metrics do not change on rotation, so the
 callback never fires.
 
+**Screen size after rotation** — the overlay engine lives under a Service and has no Activity,
+and Flutter's embedding only pushes the display size into an engine when it can find an Activity
+(confirmed by disassembling `ViewUtils.calculateMaximumDisplayMetrics` in Flutter 3.38.10), so
+the overlay's `display.size` stays at the orientation the engine was created in. Measured: created
+in landscape and rotated back to portrait, the "snap right once the ball's centre passes half the
+width" threshold became 487dp while portrait is only 417dp wide, so dragging right always snapped
+back to the left. Added `getScreenSize` (`getRealMetrics`, the same meaning as `display.size`);
+the Dart side asks for it at the start of every action that needs the size.
+
 ### `flutter_accessibility_service` (copy of 1.2.0)
 
 Nine defects, all found by measuring on a real device:
@@ -128,6 +184,13 @@ The last one was the hardest to find: the system settings screen still lists the
 enabled, but it never actually connected, and `dispatchGesture` handles that by **silently
 returning false with no log at all**. It took a log line added in the native code to see both the
 `source=null` behaviour and the crash loop.
+
+One feature upstream does not have is also **added** (not a defect): `takeScreenshot`, which
+returns the RGBA pixels directly. Upstream only offers `GLOBAL_ACTION_TAKE_SCREENSHOT`, which drops
+a file into the gallery and shows the system screenshot UI, so the app cannot read back what it
+just captured. Failures are not swallowed but mapped to `NO_ACCESS` / `TOO_FREQUENT` /
+`SECURE_WINDOW` / `NOT_CONNECTED` / `UNSUPPORTED`, so the caller can say something actionable.
+The service XML has to declare `canTakeScreenshot`.
 
 ## Known issues
 
@@ -153,6 +216,16 @@ full screen width. Item 3 evens them out.
 happen to match on those are treated as "unchanged" and the tree is skipped, leaving only the
 event itself.
 
+**Rotating while the panel is open does not re-lay it out right away**: the screen size is fetched
+at the start of each action (the overlay's Dart side gets no rotation notice), so the new size
+only takes effect on the next action.
+
+**With gesture navigation, a drag that starts at the screen edge can be taken by the system back
+gesture**: when the ball rests on an edge and the touch lands in the outermost strip, the system
+treats it as a back gesture and the overlay only receives a cancel — the ball neither moves nor
+snaps (measured: starting 24dp from the edge works only some of the time, 42dp always works).
+Starting the drag from the inner side of the ball is fine.
+
 ## Traps hit along the way (all documented in `lib/main.dart` comments)
 
 - `showOverlay` takes width/height in px, while `resizeOverlay` and `startPosition` take dp
@@ -175,3 +248,8 @@ event itself.
   panel
 - The system **hides third-party overlays on some settings screens** (anti-tapjacking) and there
   is no way around it; the accessibility service is unaffected, so recording continues meanwhile
+- The overlay's `display.size` does not follow rotation (its engine has no Activity); ask the
+  native side instead
+- Window sizes are dp converted to whole pixels, and rounding can leave a fraction of a pixel less
+  than computed: content with a hard-coded size then overflows, so let it fill the remaining
+  space; a `Border` also eats into the content area and has to be counted in the size
