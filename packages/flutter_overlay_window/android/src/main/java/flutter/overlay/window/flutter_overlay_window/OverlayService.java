@@ -247,6 +247,8 @@ public class OverlayService extends Service implements View.OnTouchListener {
             } else if (call.method.equals("exitApp")) {
                 result.success(null);
                 exitApp();
+            } else if (call.method.equals("openHostApp")) {
+                result.success(openHostApp());
             }
         });
         overlayMessageChannel.setMessageHandler((message, reply) -> {
@@ -971,6 +973,27 @@ public class OverlayService extends Service implements View.OnTouchListener {
         // the service would be scheduled for a restart.
         mAnimationHandler.postDelayed(
                 () -> android.os.Process.killProcess(android.os.Process.myPid()), 300);
+    }
+
+    /// LOCAL PATCH: brings the host app forward with exactly the intent its launcher icon sends
+    /// (MAIN + LAUNCHER, component only, NEW_TASK | RESET_TASK_IF_NEEDED — read off the recents of
+    /// tasks the launcher started), so the system treats both as the same task.
+    ///
+    /// The app used to start its activity through android_intent_plus with action "action_main"
+    /// (passed through verbatim, not ACTION_MAIN) and a package, which the plugin always sets with
+    /// a component. With the Flutter template's taskAffinity="", recents only merges two tasks
+    /// whose intents are filterEquals — and those never were. Measured: back out of the host app
+    /// while the overlay keeps the process alive (its task stays in recents, empty), then "back to
+    /// app" → a second overlay_demo card in recents next to the stale one.
+    private boolean openHostApp() {
+        Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (launch == null || launch.getComponent() == null) return false;
+        // makeMainActivity, not the launch intent itself: getLaunchIntentForPackage also sets the
+        // package, and that is enough to make filterEquals fail against the launcher's intent.
+        Intent intent = Intent.makeMainActivity(launch.getComponent());
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        startActivity(intent);
+        return true;
     }
 
     /// In raw screen coordinates, as AOSP does: the event's own coordinates are relative to a

@@ -3,8 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:android_intent_plus/flag.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_accessibility_service/accessibility_event.dart';
@@ -863,16 +861,14 @@ class _FloatingBallState extends State<FloatingBall>
   ///
   /// 懸浮層與主 App 是兩個 isolate，這裡沒有 BuildContext 可以導頁，只能走 Android
   /// intent 把 Activity 拉起來。先收合，否則全螢幕的懸浮層會蓋在它上面。
+  ///
+  /// intent 交給原生發（OverlayService.openHostApp），要跟桌面圖示發的一模一樣：之前用
+  /// android_intent_plus 自己組，action 與 package 都跟桌面的不同，主 App 被返回鍵關掉後再按
+  /// 「返回 App」，多工畫面就會多出一張卡片。
   Future<void> _openMainApp() async {
     await _collapse();
     _report(_l10n.backToApp);
-    const AndroidIntent intent = AndroidIntent(
-      action: 'action_main',
-      package: 'com.louis.overlay_demo',
-      componentName: 'com.louis.overlay_demo.MainActivity',
-      flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_SINGLE_TOP],
-    );
-    await intent.launch();
+    await _callOverlay(() => _selfChannel.invokeMethod<void>('openHostApp'));
   }
 
   Future<void> _onNativeCall(MethodCall call) async {
