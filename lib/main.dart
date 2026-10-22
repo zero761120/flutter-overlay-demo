@@ -278,7 +278,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       // 它的每一拍是 post 到主執行緒佇列執行的，點擊當下主執行緒正忙，「到位就取消」
       // 的判斷會排在我們搬完視窗之後才跑 → 落差變成整個螢幕 → 開始動畫。
       // 因此靠「等它收斂」是擋不住的（讀到的穩定是假的，動畫根本還沒開始），
-      // 只能不讓它被排程。吸附改由收合時自己做，時機完全可控。
+      // 只能不讓它被排程。吸附改成放手時由 OverlayService.springToEdge、收合時由
+      // _collapse 自己做，時機完全可控。
       positionGravity: PositionGravity.none,
       enableDrag: true,
       overlayTitle: overlayTitle,
@@ -679,7 +680,26 @@ class _FloatingBallState extends State<FloatingBall>
   /// 懸浮窗形態的縮放 / 移動走這條（由 OverlayService 註冊在第二引擎上）。
   static const MethodChannel _selfChannel = MethodChannel('x-slayer/overlay');
 
-  _BallMode _mode = _BallMode.idle;
+  _BallMode _modeValue = _BallMode.idle;
+
+  _BallMode get _mode => _modeValue;
+
+  /// 拖去底部 X 丟掉與放手吸邊都只給球：解答小卡也走原生拖曳，但拖它不該冒出 X、也不該
+  /// 被吸到邊上。原生分不出視窗現在是哪一種，由這裡告訴它。形態在七處切換，集中在 setter
+  /// 通知，免得哪處漏掉。
+  set _mode(_BallMode mode) {
+    final bool wasBall = _modeValue == _BallMode.idle;
+    final bool isBall = mode == _BallMode.idle;
+    _modeValue = mode;
+    if (wasBall != isBall) {
+      _callOverlay(
+        () => _selfChannel.invokeMethod<void>(
+          'setBallMode',
+          <String, bool>{'ball': isBall},
+        ),
+      );
+    }
+  }
 
   /// 展開當下球的位置（dp，螢幕左上角為原點）。
   ///
@@ -689,15 +709,14 @@ class _FloatingBallState extends State<FloatingBall>
   /// 所以不需要自己接管拖曳來換取「知道球在哪」。
   Offset _ballAtExpand = Offset.zero;
 
-  /// 自己做的吸附動畫。原生那個關掉了（理由見 showOverlay 的 positionGravity 註解），
-  /// 這一份的關鍵差別是**我們握有取消權**：展開前一定能停掉，不會跟搬視窗搶。
-  Timer? _snapTimer;
-
   /// 放手後要不要自動吸附到邊緣。
   ///
   /// 連點情境通常要關掉：`dispatchGesture` 是派到系統層，目標若落在球底下，那一下會被
   /// 我們自己的懸浮窗吃掉；吸附把球釘在邊緣，剛好讓「目標在邊緣附近」變成高機率情境。
   /// 純截圖情境則留著比較順手。
+  ///
+  /// 放手後的吸附由原生做（OverlayService.springToEdge，跟著螢幕刷新跑彈簧），這裡只管
+  /// 開關，改了要用 [_syncSnapToEdge] 同步過去；收合時落點貼邊仍由 [_collapse] 自己算。
   bool _snapEnabled = true;
 
   /// 連點的目標座標（dp，螢幕左上角為原點）。null 代表還沒設定。
@@ -750,13 +769,14 @@ class _FloatingBallState extends State<FloatingBall>
       if (!mounted) return;
       setState(() => _lastFromApp = '$message');
     });
+    _selfChannel.setMethodCallHandler(_onNativeCall);
     WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _snapTimer?.cancel();
+    _selfChannel.setMethodCallHandler(null);
     _clickTimer?.cancel();
     _a11ySub?.cancel();
     _sub?.cancel();
@@ -851,6 +871,22 @@ class _FloatingBallState extends State<FloatingBall>
       flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK, Flag.FLAG_ACTIVITY_SINGLE_TOP],
     );
     await intent.launch();
+  }
+
+  Future<void> _onNativeCall(MethodCall call) async {
+    if (call.method == 'onDismissed') await _exitCompletely();
+  }
+
+  /// 球被丟進底部的 X：收掉手上的工作，再請原生把整個 App 連同行程收掉。
+  ///
+  /// `exitApp` 不走 [_callOverlay]：原生剛透過同一條 channel 呼叫過來，handler 必定在；
+  /// 而 [_callOverlay] 重試完會把例外吞掉，這裡要讓失敗傳回原生，它收到 error 會自己收尾，
+  /// 不會留下一顆看不見的球。
+  Future<void> _exitCompletely() async {
+    _clickTimer?.cancel();
+    // 錄到的步驟只在記憶體裡，行程一死就沒了，先落檔。
+    if (_recording) await _stopRecording();
+    await _selfChannel.invokeMethod<void>('exitApp');
   }
 
   /// 把懸浮層做過的動作回報給主 App，讓那邊的「訊息紀錄」變成有用的歷程。
@@ -1149,44 +1185,18 @@ class _FloatingBallState extends State<FloatingBall>
   /// 視窗是從自己被錨定的那一角長出來的，球貼在左緣時面板會整片長到畫面外。
   /// 展開時改成讓視窗鋪滿螢幕、由 Flutter 依 `_onRight` 決定面板靠哪邊，
   /// 順便得到「點空白處收合」的行為。
-  // ── 吸附 ──
-  //
-  // 原生拖曳期間 OnTouchListener 一律 return false，事件照樣會傳到 Flutter，
-  // 所以放手這件事這裡收得到 —— 不必為了知道「拖曳結束了」而把拖曳整個接管過來。
-
-  void _onPointerUp(PointerUpEvent event) {
-    if (!_snapEnabled || _mode != _BallMode.idle) return;
-    _startSnap();
-  }
-
-  Future<void> _startSnap() async {
-    _snapTimer?.cancel();
-    final OverlayPosition pos = await FlutterOverlayWindow.getOverlayPosition();
-    await _refreshScreen();
-    final Size screen = _screen;
-    if (!mounted || _mode != _BallMode.idle) return;
-    final double destX = pos.x + kBallDp / 2 > screen.width / 2
-        ? screen.width - kBallDp
-        : 0;
-    double x = pos.x;
-    // 沿用原生那條收斂曲線（每拍往目標收掉 1/3），手感一致。
-    _snapTimer = Timer.periodic(const Duration(milliseconds: 20), (Timer t) {
-      if (!mounted || _mode != _BallMode.idle) {
-        t.cancel();
-        return;
-      }
-      x = (2 * (x - destX)) / 3 + destX;
-      if ((x - destX).abs() < 1) {
-        x = destX;
-        t.cancel();
-      }
-      _moveWindow(x.round(), pos.y.round());
-    });
+  void _syncSnapToEdge() {
+    _callOverlay(
+      () => _selfChannel.invokeMethod<void>(
+        'setSnapToEdge',
+        <String, bool>{'enabled': _snapEnabled},
+      ),
+    );
   }
 
   Future<void> _expand() async {
-    // 吸附還在跑的話先停掉，否則它跟下面搬視窗的呼叫會搶同一組 LayoutParams。
-    _snapTimer?.cancel();
+    // 原生的吸邊彈簧不必在這裡停：點下去那一刻（ACTION_DOWN）原生就停了，切出球的形態
+    // （setBallMode）時也會再停一次。
     final OverlayPosition pos = await FlutterOverlayWindow.getOverlayPosition();
     // 展開後的面板版面（靠哪邊、高度上限）在 build 裡同步讀 _screen，得在這裡先更新。
     await _refreshScreen();
@@ -1494,19 +1504,16 @@ class _FloatingBallState extends State<FloatingBall>
   }
 
   Widget _buildBall() {
-    return Listener(
-      onPointerUp: _onPointerUp,
-      child: GestureDetector(
-        onTap: _mode == _BallMode.expanded ? _collapse : _expand,
-        child: Container(
-          width: kBallDp.toDouble(),
-          height: kBallDp.toDouble(),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: BlueSkin.main.withValues(alpha: 0.9),
-          ),
-          child: const Icon(Icons.blur_on, color: Colors.white, size: 24),
+    return GestureDetector(
+      onTap: _mode == _BallMode.expanded ? _collapse : _expand,
+      child: Container(
+        width: kBallDp.toDouble(),
+        height: kBallDp.toDouble(),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: BlueSkin.main.withValues(alpha: 0.9),
         ),
+        child: const Icon(Icons.blur_on, color: Colors.white, size: 24),
       ),
     );
   }
@@ -1581,6 +1588,7 @@ class _FloatingBallState extends State<FloatingBall>
                     label: _l10n.snapEdge(_snapEnabled ? _l10n.on : _l10n.off),
                     onTap: () {
                       setState(() => _snapEnabled = !_snapEnabled);
+                      _syncSnapToEdge();
                       _report(
                         _l10n.snapEdge(_snapEnabled ? _l10n.on : _l10n.off),
                       );
