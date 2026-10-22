@@ -790,8 +790,12 @@ class _FloatingBallState extends State<FloatingBall>
     // 光送 resumed 只有第一次收得到——LifecycleChannel 會吞掉跟上一次相同的狀態——所以原生那邊
     // 每次顯示都先送 inactive（見 OverlayService.onStartCommand 的 LOCAL PATCH）。
     // 位置與尺寸都由原生依 showOverlay 的參數擺好，這裡不必也不該再去動。
+    // 選點模式是展開狀態底下的一層，也要一起清：留著的話，重開後點球會直接進選點，而不是開面板。
     if (state == AppLifecycleState.resumed && mounted) {
-      setState(() => _mode = _BallMode.idle);
+      setState(() {
+        _mode = _BallMode.idle;
+        _picking = false;
+      });
     }
   }
 
