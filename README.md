@@ -50,6 +50,21 @@ fvm flutter build apk --debug
 input motionevent` 停住時不會像真手指一樣持續送出微小移動，而 AOSP「橫向速度太快不吸」的規則要等
 下一個移動事件才會重新判斷，所以「拖進 X 放手」會假失敗——停住後要補一個微動。
 
+其他用 adb 測試時踩過的坑：
+
+- 螢幕關著時，`adb shell input` 的點擊會全部靜默無效，不會報錯。先確認
+  `dumpsys power` 是 `mWakefulness=Awake`、`dumpsys window` 是 `isKeyguardShowing=false`
+- 球不在預期位置時，照座標點下去會點到底下的 App 或桌面。每次點之前先用 `dumpsys window windows`
+  確認懸浮窗的位置與尺寸
+- 選點模式會蓋滿全螢幕，點不到主 App 的「關閉懸浮球」。要模擬關閉，送一個效果相同的關閉指令
+  （按鈕走的是 `closeOverlay` → `stopService`，這條走 `onStartCommand` 的 `IsCloseWindow` 分支，結果一樣）：
+  `adb shell run-as com.louis.overlay_demo am startservice --user 0 -n
+  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService --ez IsCloseWindow true`
+- 模擬從桌面圖示開 App 要用 `am start -a android.intent.action.MAIN -c
+  android.intent.category.LAUNCHER -f 0x10200000 -n <元件>`。只用 `am start -n` 的話 intent 跟桌面的
+  不同，多工畫面會多出一張卡片。模擬把卡片滑掉用 `am stack remove <taskId>`
+- `input motionevent` 吃小數座標，可以用來測拖曳的 sub-pixel 行為
+
 ## 錄製操作流程
 
 訂閱無障礙事件、記錄使用者在其他 App 的操作，落成 JSON。用途是把「爬得到什麼」從猜測
@@ -139,7 +154,9 @@ App 的畫面文字**。這些能力本身是 Android 官方 API、用途中性�
 2026-10 恢復更新（1.0.0／1.0.1，main 之後又合併了一批）。2026-10-22 比對 main（`e3c3549`）：
 拖曳門檻改用 touch slop、sub-pixel 拖曳、拖去 X（簡化版）、`getScreenSize`、拖完不算點擊、只在真的
 拖過才吸邊，上游已修或有對應做法；`onStartCommand` 的 crash、訊息路由、轉向後跑出畫面、重開收不到
-resumed、resize 高度判斷式則都還沒修。這裡仍用 0.5.0 的修改版。
+resumed、resize 高度判斷式則都還沒修。這裡仍用 0.5.0 的修改版：整包換成新版的話，上面那些沒修的
+都得在大改過的程式碼上重做，上游的拖去 X 也會跟這裡的互相衝突，所以只把兩個修正移植回來——
+`requestPermission()` 永遠不回傳（上游 #187）與 sub-pixel 拖曳（上游 #197），見下方。
 
 - [#205](https://github.com/X-SLAYER/flutter_overlay_window/issues/205) — `onStartCommand` 的
   crash（先前回報的 #177／#181／#186 已被關閉，但程式碼沒改）
@@ -185,7 +202,7 @@ RESET_TASK_IF_NEEDED`，系統會把它跟桌面開的視為同一筆、取代�
 
 **重開懸浮球時 Dart 收不到 resumed** — 外掛每次顯示只送 `appIsResumed`，而 Flutter 的
 `LifecycleChannel` 會吞掉跟上一次相同的狀態，所以懸浮層的 Dart 只有第一次顯示時收得到 resumed。
-`main.dart` 靠它在重開時把形態重設成球，這段一直沒生效過。實測：解答小卡開著時從主 App 關閉懸浮球、
+`main.dart` 靠它在重開時把形態（連同選點模式）重設成球，這段一直沒生效過。實測：解答小卡開著時從主 App 關閉懸浮球、
 再打開，小卡被擠在球大小的視窗裡（出現 OVERFLOWED）。現在每次顯示先送 inactive 再送 resumed。
 沒改成「關閉時送 paused」：關閉後馬上再顯示時，前一次的 onDestroy 可能晚於這次顯示才跑
 （`main.dart` 的 `_show` 註解記過這個時序），會讓顯示中的懸浮層停在 paused。
@@ -199,6 +216,16 @@ Flutter，不送 up；單純點一下不受影響。為此「開始拖曳」的�
 改成系統的 touch slop：否則手指點的時候晃超過 2dp 就算拖曳，球會變得點不開。Flutter 判定點擊用的
 也是這個值，所以兩邊共用同一條分界——低於它兩邊都算點擊，超過它兩邊都算拖曳（這台 Sony 實測：晃
 40px 仍會開面板，50px 就算拖曳）。
+
+**`requestPermission()` 永遠不回傳**（從上游 main 移植，#187）— 外掛實作了 `ActivityResultListener`，
+0.5.0 卻從沒註冊，`onActivityResult` 一次都不會被呼叫；另外它在每個方法呼叫的開頭都覆寫等待中的
+result，授權頁開著時任何其他呼叫都會把它蓋掉。實測：收回懸浮窗權限後按「顯示懸浮球」→ 跳到授權頁 →
+給權限、按返回，懸浮球不會出現（`_show` 一直卡在等它），要再按一次。現在在 activity 綁定／重新綁定時
+註冊、解除時移除，等待中的 result 只保留 `requestPermission` 自己的，用完即清。
+
+**拖曳的小數位移被捨掉**（從上游 main 移植，#197）— 每個事件的位移都被截成整數，`lastX` / `lastY`
+卻照樣往前推，所以每次移動都少算最多 1px，慢慢拖（每個事件不到 1px）時球完全不動。實測：拖曳開始後，
+手指以每次 0.5px 移動 20px，球 0px。現在把捨掉的小數累積到下一個事件，同樣的操作球跟上 20px。
 
 **新增：拖去 X 關閉、放手吸邊改由原生做**（不是缺陷，見「拖去 X 關閉」）。三個實作上的取捨：
 

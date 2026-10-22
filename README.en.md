@@ -63,6 +63,25 @@ unlike a real finger that keeps reporting tiny moves, and AOSP's "don't stick wh
 too fast" rule is only re-evaluated on the next move event — so "drag into the X and release" can
 fail spuriously. Add one small move after the pause.
 
+Other traps hit while testing over adb:
+
+- With the screen off, `adb shell input` taps are all silently ignored, with no error. Check first
+  that `dumpsys power` says `mWakefulness=Awake` and `dumpsys window` says
+  `isKeyguardShowing=false`
+- If the ball is not where expected, tapping by coordinates lands on the app or home screen
+  underneath. Before each tap, check the overlay window's position and size with
+  `dumpsys window windows`
+- Picker mode covers the whole screen, so the host app's "close overlay" button cannot be reached.
+  To simulate closing, send an equivalent close (the button goes through `closeOverlay` →
+  `stopService`; this goes through `onStartCommand`'s `IsCloseWindow` branch, with the same result):
+  `adb shell run-as com.louis.overlay_demo am startservice --user 0 -n
+  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService --ez IsCloseWindow true`
+- To simulate opening the app from the launcher icon, use `am start -a android.intent.action.MAIN
+  -c android.intent.category.LAUNCHER -f 0x10200000 -n <component>`. A bare `am start -n` sends a
+  different intent and leaves an extra card in recents. To simulate swiping a card away, use
+  `am stack remove <taskId>`
+- `input motionevent` accepts fractional coordinates, which is how sub-pixel dragging can be tested
+
 ## Recording a flow
 
 Subscribes to accessibility events, records what the user does in other apps, and writes it to
@@ -181,7 +200,10 @@ slop drag threshold, sub-pixel dragging, drag to X (a simpler version), `getScre
 longer ending as taps, and snapping only after a real drag are fixed or have an equivalent upstream;
 the `onStartCommand` crash, message routing, the ball ending up off-screen after rotation, no
 "resumed" on reopen, and the resize height condition are all still unfixed. This repo still uses
-its modified copy of 0.5.0.
+its modified copy of 0.5.0: switching to a new release would mean redoing all of the unfixed ones
+above on heavily reworked code, and upstream's drag to X would clash with the one here, so only two
+fixes were ported back — `requestPermission()` never completing (upstream #187) and sub-pixel
+dragging (upstream #197); see below.
 
 - [#205](https://github.com/X-SLAYER/flutter_overlay_window/issues/205) — the `onStartCommand`
   crash (the earlier reports #177 / #181 / #186 were closed, but the code was not changed)
@@ -238,7 +260,7 @@ used and has been removed.
 **Dart never sees "resumed" when the overlay is reopened** — the plugin only ever sends
 `appIsResumed` on show, and Flutter's `LifecycleChannel` drops a state equal to the last one, so
 the overlay's Dart side only got "resumed" on the first show. `main.dart` relies on it to reset
-to the ball on reopen, and that reset never ran. Measured: close the overlay from the host app
+to the ball (picker mode included) on reopen, and that reset never ran. Measured: close the overlay from the host app
 while the solution card is up, reopen it, and the card is drawn squeezed into the ball's window
 ("OVERFLOWED"). Every show now sends inactive, then resumed. Not done as "paused" on close
 instead: when the overlay is shown again right after closing, the previous onDestroy can run after
@@ -256,6 +278,20 @@ slop instead of upstream's 5 physical px (~2dp): otherwise a tap that wobbles mo
 count as a drag and the ball would become hard to open. Flutter takes its tap slop from the same
 value, so both sides share one boundary — under it a tap for both, past it a drag for both
 (measured on the Sony: a 40px wobble still opens the panel, 50px drags).
+
+**`requestPermission()` never completes** (ported from upstream main, #187) — the plugin implements
+`ActivityResultListener` but 0.5.0 never registered it, so `onActivityResult` never ran; it also
+overwrote the pending result at the top of every method call, so any other call made while the
+settings page was open replaced it. Measured: with the overlay permission revoked, "show" opened the
+settings page; after granting and pressing Back, the overlay did not appear (`_show` was still
+waiting on it) and had to be shown again. The listener is now registered on attach / reattach and
+removed on detach, and only `requestPermission`'s own result is kept, cleared once answered.
+
+**Fractions of the drag were dropped** (ported from upstream main, #197) — each event's delta was
+truncated to int while `lastX` / `lastY` still advanced, so every move lost up to a pixel, and a
+slow drag (under 1px per event) did not move the ball at all. Measured: once the drag had started,
+moving the finger 20px in 0.5px steps moved the ball 0px. The dropped fraction is now carried to
+the next event; the same moves bring the ball along the full 20px.
 
 **Added: drag to X to close, and the release snap moved to native code** (not defects; see "Drag
 to X to close"). Three implementation choices:
