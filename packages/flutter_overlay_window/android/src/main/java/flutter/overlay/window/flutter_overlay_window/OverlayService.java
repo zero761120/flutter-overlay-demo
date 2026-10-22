@@ -74,6 +74,8 @@ public class OverlayService extends Service implements View.OnTouchListener {
 
     private Handler mAnimationHandler = new Handler();
     private float lastX, lastY;
+    /// LOCAL PATCH: sub-pixel part of the drag not yet applied to the window (see ACTION_MOVE).
+    private float dragRemainderX, dragRemainderY;
     private int lastYPosition;
     private boolean dragging;
     private static final float MAXIMUM_OPACITY_ALLOWED_FOR_S_AND_HIGHER = 0.8f;
@@ -569,6 +571,8 @@ public class OverlayService extends Service implements View.OnTouchListener {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     dragging = false;
+                    dragRemainderX = 0f;
+                    dragRemainderY = 0f;
                     // LOCAL PATCH (drag-to-dismiss): a new touch takes the ball back, as AOSP's
                     // MagnetizedObject does on ACTION_DOWN. A pending "dismiss once the spring
                     // lands" must be called off with the spring — left set, the next spring to
@@ -620,10 +624,19 @@ public class OverlayService extends Service implements View.OnTouchListener {
                     boolean invertY = WindowSetup.gravity == (Gravity.BOTTOM | Gravity.LEFT)
                             || WindowSetup.gravity == Gravity.BOTTOM
                             || WindowSetup.gravity == (Gravity.BOTTOM | Gravity.RIGHT);
-                    int xx = params.x + ((int) dx * (invertX ? -1 : 1));
-                    int yy = params.y + ((int) dy * (invertY ? -1 : 1));
-                    params.x = xx;
-                    params.y = yy;
+                    // LOCAL PATCH: carry the fraction over instead of dropping it. Upstream truncated
+                    // each event's delta to int while lastX/lastY still advanced, so every move lost
+                    // up to a pixel and a slow drag (< 1px per event) did not move the ball at all.
+                    // Measured: after the drag started, 40 moves of 0.5px moved the finger 20px and
+                    // the ball 0px. Upstream's main does the same carry-over (#197).
+                    float moveX = dx * (invertX ? -1 : 1) + dragRemainderX;
+                    float moveY = dy * (invertY ? -1 : 1) + dragRemainderY;
+                    int stepX = (int) moveX;
+                    int stepY = (int) moveY;
+                    dragRemainderX = moveX - stepX;
+                    dragRemainderY = moveY - stepY;
+                    params.x = params.x + stepX;
+                    params.y = params.y + stepY;
                     if (windowManager != null) {
                         windowManager.updateViewLayout(flutterView, params);
                     }
