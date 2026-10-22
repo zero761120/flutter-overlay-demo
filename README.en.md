@@ -4,7 +4,9 @@
 
 A Flutter spike for an Android floating ball (AssistiveTouch-like). Personal use, not a product.
 
-The ball is draggable and snaps to the nearest edge (toggleable); tapping it opens a menu with:
+The ball is draggable and snaps to the nearest edge on release (toggleable); while dragging, an X
+appears at the bottom — drop the ball on it (or fling it there) to close the whole app. Tapping
+the ball opens a menu with:
 set tap target, start/stop auto tap (300ms interval), screenshot, **solve MeowDoku**, **record a
 flow**, clear recordings, back to app. Whatever the overlay does is reported back to the host app
 and listed
@@ -26,6 +28,40 @@ theme reused from another project.
 fvm flutter pub get
 fvm flutter build apk --debug
 ```
+
+## Drag to X to close
+
+The feel follows the system's notification bubbles (AOSP WM Shell's `DismissView` +
+`MagnetizedObject`):
+
+- When a drag starts, an X fades in at the bottom centre (white ring, transparent inside)
+- Once the finger is within 64dp of it, the ball springs into the centre carrying the finger's
+  velocity, with a haptic tick, and the ring widens around it; leaving that radius springs the
+  ball back to the finger
+- Release on the X, or fling towards it (fast enough downwards, with the line of the fling
+  crossing the X's row inside a band three X-widths wide centred on it): the ball shrinks away,
+  then the overlay, its foreground
+  notification and the host app (removed from recents too) are closed and the process ends. A
+  recording in progress is saved first
+- Released anywhere else (if snapping is on): the ball springs to the nearest edge, or to the far
+  one if flung there fast enough
+
+Springs and thresholds are taken from AOSP (android13): stick-in stiffness 1500 / critically
+damped, spring-to-finger 12000 / 0.85, edge snap 700 / 0.85. AOSP's velocity thresholds are in
+px/s; here they are converted to dp/s at the test device's density.
+
+The accessibility service is **not** turned off (it would have to be re-enabled in Settings next
+time). As long as it stays enabled, the system immediately brings up a new process to bind it:
+that process has no Flutter engine and ignores every event while nobody is listening (see the
+fixes below) — measured at about 28MB PSS.
+
+The system caps non-touchable overlays at 0.8 opacity, so the X's white reads slightly grey.
+
+**When automating tests**: start drags at least 42dp from the screen edge (see the back gesture
+under "Known issues"). Also, `adb shell input motionevent` sends nothing while "holding still",
+unlike a real finger that keeps reporting tiny moves, and AOSP's "don't stick when moving sideways
+too fast" rule is only re-evaluated on the next move event — so "drag into the X and release" can
+fail spuriously. Add one small move after the pause.
 
 ## Recording a flow
 
@@ -93,7 +129,9 @@ a UiAutomation, and while it is connected Android **suspends every accessibility
 settings screen still says "enabled", but the screenshot reports that the service is not ready.
 mobile-mcp leaves `com.mobilenext.mobilecli.DeviceServer` running on the device for 30 minutes of
 idle time; `adb shell kill` it and the service rebinds on its own within a second or two. Driving
-the device with `adb shell input` + `adb exec-out screencap` avoids the problem altogether.
+the device with `adb shell input` + `adb exec-out screencap` avoids the problem altogether. To
+check whether the service is bound, read Bound services in `dumpsys accessibility`: the list wraps
+onto the next line, and grepping a single line misreads "bound" as "not bound".
 
 ## Before you use it
 
@@ -121,8 +159,9 @@ This project is MIT (see `LICENSE`).
 The two packages under `packages/` are **modified copies** of third-party code, originally by
 Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Every change is
 marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
-The fixes address genuine upstream defects or limitations upstream does not handle; there is
-also one added feature (a screenshot that returns pixels), likewise listed in the next section.
+The fixes address genuine upstream defects or limitations upstream does not handle; there are
+also a few added features (a screenshot that returns pixels, drag to X to close, the native edge
+snap), likewise listed in the next section.
 
 The `flutter_accessibility_service` ones have been reported upstream:
 
@@ -131,8 +170,13 @@ The `flutter_accessibility_service` ones have been reported upstream:
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — the five capture
   defects, plus two architectural findings where no fix is proposed
 
-None of the `flutter_overlay_window` ones were reported: upstream's last release was 2025-04,
-roughly 17 months ago.
+The two found later (the `onStartCommand` crash, processing events with nobody listening) have not
+been reported yet.
+
+None of the `flutter_overlay_window` ones were reported: at the time, upstream's last release was
+2025-04, a year and a half earlier. Upstream has since published 1.0.0 / 1.0.1 in 2026-10 (checked
+on pub.dev); this repo still uses its modified copy of 0.5.0, and whether the new releases fix the
+defects below has not been compared.
 
 ## Locally patched third-party packages
 
@@ -162,11 +206,48 @@ the overlay's `display.size` stays at the orientation the engine was created in.
 in landscape and rotated back to portrait, the "snap right once the ball's centre passes half the
 width" threshold became 487dp while portrait is only 417dp wide, so dragging right always snapped
 back to the left. Added `getScreenSize` (`getRealMetrics`, the same meaning as `display.size`);
-the Dart side asks for it at the start of every action that needs the size.
+the Dart side asks for it at the start of every action that needs the size. The release snap has
+since moved to native code, which reads the size itself; Dart now uses it for expand/collapse.
+
+**Restart with a null intent after the process is killed** — `onStartCommand` returned
+`START_STICKY` yet read the intent unconditionally. If the process died while the overlay was up,
+the system restarted the service with a null intent and it threw an NPE. A restart could not have
+brought the overlay back anyway (its position and size lived in the intent that is gone), so every
+return is now `START_NOT_STICKY`, plus a null check.
+
+**A drag released as a tap** — the window follows the finger, so in the window's own coordinates
+the pointer barely moves, and Flutter's tap slop (on Android, the platform touch slop) is only
+exceeded on an event where the window happens to lag one step behind the finger. Measured with a slow drag inward from the left
+edge: Flutter saw at most 13 logical px of movement, fired `onTap` on release and the panel
+opened; the pre-patch build differed only in having one lagging event (26 px) in that drag — a
+race, not a rule. Now, whenever the ball was dragged, Flutter gets a cancel instead of the up on
+release; a plain tap is unaffected. That is also why the drag now starts at the platform touch
+slop instead of upstream's 5 physical px (~2dp): otherwise a tap that wobbles more than 2dp would
+count as a drag and the ball would become hard to open. Flutter takes its tap slop from the same
+value, so both sides share one boundary — under it a tap for both, past it a drag for both
+(measured on the Sony: a 40px wobble still opens the panel, 50px drags).
+
+**Added: drag to X to close, and the release snap moved to native code** (not defects; see "Drag
+to X to close"). Three implementation choices:
+
+- The X is a separate native window, not drawn in Flutter: the plugin hosts a single Flutter
+  window, so drawing it there would mean growing the ball's window to full screen mid-drag —
+  exactly the ~280ms position lag, plus the coordinate origin jumping under the finger
+- The X's window must be added **before** the ball's (windows of the same type stack in the order
+  they are added). The first version added it when a drag started, and on video the ball was
+  covered by the X for the few frames it took to slide in; now it is added as soon as the overlay
+  appears and stays transparent until needed
+- The snap used to move the window from Dart every 20ms through the method channel, out of step
+  with the display: measured frame by frame on video, about half the frames did not move at all
+  (per-frame steps 76, 0, 0, 52, 31, 0, 0, 0, 24, …). It is now a native spring driven by
+  Choreographer. For the release snap Dart keeps only the toggle (`setSnapToEdge`) and "is the
+  window the ball right now" (`setBallMode` — the solution card is draggable too, but neither
+  snaps nor gets an X). Collapsing still places the ball at the edge from Dart, in one move rather
+  than an animation
 
 ### `flutter_accessibility_service` (copy of 1.2.0)
 
-Nine defects, all found by measuring on a real device:
+Eleven defects, all found by measuring on a real device:
 
 | Defect | Consequence |
 |---|---|
@@ -178,12 +259,19 @@ Nine defects, all found by measuring on a real device:
 | Events with a null `getSource()` dropped entirely | **clicks almost always arrive with `source=null`**, so that whole class vanished silently |
 | Broadcast was a bare signal with the payload in one shared-prefs slot | back-to-back events overwrote each other |
 | `performGlobalAction` checked only the settings flag and returned `true` unconditionally | a failed action looked like a successful one |
+| Every event processed even with nobody listening | the system keeps an enabled service bound and the process resident; even the status-bar clock updating cost a tree walk on the main thread, a shared-prefs write and a broadcast |
+| `onStartCommand` returned `START_STICKY` and read the intent unconditionally | the plugin delivers commands via `startService`, leaving the service start-requested; once the process is killed (swiped from recents, reclaimed for memory) the system restarts it with a null intent → NPE, again a few seconds later → "keeps stopping" |
 | `onServiceConnected` called `requireNonNull` on an uncached engine | guaranteed NPE when the process is started by the service → crash loop → the service never connects |
 
 The last one was the hardest to find: the system settings screen still lists the service as
 enabled, but it never actually connected, and `dispatchGesture` handles that by **silently
 returning false with no log at all**. It took a log line added in the native code to see both the
 `source=null` behaviour and the crash loop.
+
+The `onStartCommand` one is the "accessibility suddenly stopped working" that actually happened:
+`adb logcat -b crash` still held two NPEs a few seconds apart. To reproduce: `adb shell run-as
+com.louis.overlay_demo am startservice --user 0 -n <service component>` puts the service in the
+started state (without `--user 0` it is refused), then kill the process with `run-as … kill -9`.
 
 One feature upstream does not have is also **added** (not a defect): `takeScreenshot`, which
 returns the RGBA pixels directly. Upstream only offers `GLOBAL_ACTION_TAKE_SCREENSHOT`, which drops
@@ -211,6 +299,14 @@ The two edges used to feel different for the same reason: expanding always ancho
 (0,0), so a ball on the left needs no horizontal move while one on the right travels almost a
 full screen width. Item 3 evens them out.
 
+**Window animations are still occasionally uneven at 120Hz**: sticking to the X, the edge snap and
+dragging all move a small window with `updateViewLayout`, one call per frame. Per-frame steps on
+video still vary (e.g. 84, 34, 52, 0) — presumably because the cross-process position update does
+not always land on the same frame, though it may just be sampling aliasing in the recording;
+**which of the two was not determined**. The system's bubbles are perfectly smooth because they
+move views inside one large window and narrow its touchable region with a hidden API, which
+ordinary apps cannot use.
+
 **The recorder's tree dedup can skip a screen**: the fingerprint is only
 `packageName + child count + first 8 text fragments`, so two visually different screens that
 happen to match on those are treated as "unchanged" and the tree is skipped, leaving only the
@@ -222,9 +318,10 @@ only takes effect on the next action.
 
 **With gesture navigation, a drag that starts at the screen edge can be taken by the system back
 gesture**: when the ball rests on an edge and the touch lands in the outermost strip, the system
-treats it as a back gesture and the overlay only receives a cancel — the ball neither moves nor
-snaps (measured: starting 24dp from the edge works only some of the time, 42dp always works).
-Starting the drag from the inner side of the ball is fine.
+treats it as a back gesture and the overlay only receives a cancel — the ball does not move
+(measured: starting 24dp from the edge works only some of the time, 42dp always works). Starting
+the drag from the inner side of the ball is fine. If the system takes over mid-drag, the cancel
+snaps the ball back to the edge as usual.
 
 ## Traps hit along the way (all documented in `lib/main.dart` comments)
 

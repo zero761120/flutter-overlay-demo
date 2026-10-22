@@ -4,7 +4,8 @@
 
 Android 懸浮球（類 AssistiveTouch）的 Flutter 實作驗證。個人自用，非產品。
 
-球可拖曳、吸附邊緣（可開關），點一下展開選單。選單提供：設定連點目標、開始／停止連點
+球可拖曳、放手吸附邊緣（可開關），拖曳時底部會出現 X，丟進去（或往它甩）就關閉整個 App。
+點一下球展開選單。選單提供：設定連點目標、開始／停止連點
 （300ms 間隔）、螢幕截圖、**解題：貓咪在哪裡**（MeowDoku）、**錄製操作流程**、清除錄製檔、
 返回 App。懸浮層做過的動作會回報
 給主 App 列成紀錄。主題與語系跟隨系統（日／夜、中／英），配色沿用一套慣用的藍色主題。
@@ -24,6 +25,30 @@ Android 懸浮球（類 AssistiveTouch）的 Flutter 實作驗證。個人自用
 fvm flutter pub get
 fvm flutter build apk --debug
 ```
+
+## 拖去 X 關閉
+
+手感照系統的通知泡泡做（AOSP WM Shell 的 `DismissView` + `MagnetizedObject`）：
+
+- 開始拖曳時，底部中間淡入一個 X（白色圓框、透明底）
+- 手指進到 X 周圍 64dp 內：球帶著手指當下的速度，用彈簧滑進中心並震一下，圓框擴大圍住球；
+  拉出範圍時，球用彈簧追回手指
+- 在 X 上放手，或往 X 用力甩（向下夠快，且甩的延伸線落在以 X 為中心、三倍 X 寬的範圍內）：球縮小消失，接著關掉
+  懸浮窗、前景通知與主 App（最近任務也一併移除），最後結束行程。錄製中的步驟會先落檔
+- 沒丟進 X 就放手（吸附開著時）：球用彈簧吸回最近的邊；朝另一邊甩得夠快就去另一邊
+
+彈簧與門檻都抄自 AOSP（android13）：吸入 stiffness 1500／臨界阻尼、追手指 12000／0.85、吸邊
+700／0.85。原本的速度門檻是 px/s，這裡依實機密度換成 dp/s。
+
+無障礙服務**不會**跟著關掉（關掉的話，下次要再到設定頁授權）。只要它還開著，系統就會立刻再拉起
+一個行程來綁定它：那個行程沒有 Flutter 引擎，沒人監聽時也不處理任何事件（見下方的修正），實測約
+28MB PSS。
+
+系統對不可觸控的覆蓋層，強制最多 0.8 的不透明度，所以 X 的白色會略帶灰。
+
+**自動化測試時注意**：起拖點要離螢幕邊至少 42dp（見「已知問題」的返回手勢）。另外，`adb shell
+input motionevent` 停住時不會像真手指一樣持續送出微小移動，而 AOSP「橫向速度太快不吸」的規則要等
+下一個移動事件才會重新判斷，所以「拖進 X 放手」會假失敗——停住後要補一個微動。
 
 ## 錄製操作流程
 
@@ -76,7 +101,8 @@ adb exec-out run-as com.louis.overlay_demo cat app_flutter/flow-<timestamp>.json
 UiAutomation，而 Android 在它連著的期間**暫停所有無障礙服務**——設定頁仍顯示「已啟用」，
 截圖卻回「服務尚未就緒」。mobile-mcp 會在裝置上留下 `com.mobilenext.mobilecli.DeviceServer`，
 閒置 30 分鐘才結束；`adb shell kill` 掉它，服務一兩秒內就自己重新綁定。改用
-`adb shell input` + `adb exec-out screencap` 就不會碰到。
+`adb shell input` + `adb exec-out screencap` 就不會碰到。要確認服務有沒有綁上，看
+`dumpsys accessibility` 的 Bound services：這份清單會跨行，只 grep 一行會把「有綁上」誤判成「沒綁上」。
 
 ## 使用須知
 
@@ -98,15 +124,19 @@ App 的畫面文字**。這些能力本身是 Android 官方 API、用途中性�
 
 `packages/` 下的兩個套件是第三方程式的**修改版**，原作者 Iheb Briki，原授權 MIT，
 各自的 `LICENSE` 檔已完整保留。修改處在原始碼中以 `LOCAL PATCH` 註解標出，內容與理由
-見下一節。修正的部分都是上游的真實缺陷或沒處理到的限制；另有一項新增功能（截圖回傳像素），
-也標在下一節。
+見下一節。修正的部分都是上游的真實缺陷或沒處理到的限制；另有幾項新增功能（截圖回傳像素、
+拖去 X 關閉、原生吸邊），也標在下一節。
 
 `flutter_accessibility_service` 的部分已回報：
 
 - [#46](https://github.com/X-SLAYER/flutter_accessibility_service/issues/46) — `onServiceConnected` 的 crash loop
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — 五個擷取缺陷，附帶兩個未主張解法的架構問題
 
-`flutter_overlay_window` 的都沒報：上游最後發布是 2025-04，已停滯約 17 個月。
+之後找到的兩項（`onStartCommand` 的 crash、沒人監聽時照樣處理事件）尚未回報。
+
+`flutter_overlay_window` 的都沒報：當時上游最後一次發布是 2025-04，已停滯一年半。上游後來在
+2026-10 發布了 1.0.0／1.0.1（pub.dev 查證）；這裡仍用 0.5.0 的修改版，新版是否已修掉下面這些缺陷
+還沒比對。
 
 ## 本地修正的第三方套件
 
@@ -130,11 +160,38 @@ viewport metrics 不變，callback 根本不會觸發。
 `ViewUtils.calculateMaximumDisplayMetrics` 反組譯確認），所以懸浮層的 `display.size` 停在
 引擎建立當下的方向。實測橫向建立、轉回直向後，吸右門檻（球心過半寬）變成 487dp，直向卻
 最寬只有 417dp，往右拖一律吸回左邊。補上 `getScreenSize`（`getRealMetrics`，與
-`display.size` 同語意），Dart 在每個要用到尺寸的動作開頭現問一次。
+`display.size` 同語意），Dart 在每個要用到尺寸的動作開頭現問一次。放手吸邊後來改由原生做，
+直接用原生量到的尺寸；Dart 這邊現在只在展開／收合時用到。
+
+**服務被殺後以 null intent 重啟** — `onStartCommand` 回 `START_STICKY`，卻無條件讀 intent。
+懸浮窗開著時行程若被殺，系統會用 null intent 重啟服務，結果 NPE。就算重啟成功也救不回懸浮窗
+（位置與尺寸都在那個已經沒了的 intent 裡），所以全部改成 `START_NOT_STICKY`，再補上 null 防護。
+
+**拖曳放手被當成點擊** — 視窗跟著手指移動，所以在視窗自己的座標裡，觸控點幾乎沒動，Flutter 的
+點擊容許範圍（在 Android 上就是系統的 touch slop）只有在「視窗剛好落後手指一步」的那個事件才會被
+超過。實測從左邊緣慢慢往內拖：
+Flutter 最多只看到 13 個邏輯像素的位移，放手時觸發 `onTap`、面板就展開了；改動前的版本只差在那次
+拖曳中剛好有一個事件落後（26 px）——是競態，不是規則。現在只要拖曳過，放手時就改送 cancel 給
+Flutter，不送 up；單純點一下不受影響。為此「開始拖曳」的門檻也從上游的 5 個實體像素（約 2dp）
+改成系統的 touch slop：否則手指點的時候晃超過 2dp 就算拖曳，球會變得點不開。Flutter 判定點擊用的
+也是這個值，所以兩邊共用同一條分界——低於它兩邊都算點擊，超過它兩邊都算拖曳（這台 Sony 實測：晃
+40px 仍會開面板，50px 就算拖曳）。
+
+**新增：拖去 X 關閉、放手吸邊改由原生做**（不是缺陷，見「拖去 X 關閉」）。三個實作上的取捨：
+
+- X 是另一個獨立的原生視窗，不是畫在 Flutter 裡：外掛只有一個 Flutter 視窗，要畫在裡面，就得在
+  拖曳途中把球的視窗撐成全螢幕——那正是約 280ms 的位置延遲，手指底下的座標原點還會跳一次
+- X 的視窗必須比球的**先**加入（同類型視窗依加入順序疊放）。第一版是開始拖曳才加，錄影看得到
+  球滑進去那幾幀被 X 蓋住；現在改成懸浮窗一出現就加入、平常透明
+- 吸邊原本是 Dart 每 20ms 透過 channel 搬一次視窗，沒對齊螢幕刷新，錄影逐幀量到約一半的幀
+  完全沒動（每幀位移 76、0、0、52、31、0、0、0、24…）。改成原生由 Choreographer 驅動的彈簧；
+  放手吸邊這件事，Dart 只剩開關（`setSnapToEdge`），以及「現在是不是球」（`setBallMode`，
+  解答小卡也能拖，但不吸邊、也不出 X）。收合時的落點仍由 Dart 直接擺到邊上，但那是一次到位，
+  不是動畫
 
 ### `flutter_accessibility_service`（1.2.0 的複本）
 
-九處，全部由實機量測發現：
+十一處，全部由實機量測發現：
 
 | 缺陷 | 後果 |
 |---|---|
@@ -146,11 +203,17 @@ viewport metrics 不變，callback 根本不會觸發。
 | `getSource()` 為 null 的事件整筆丟棄 | **點擊事件幾乎必然 `source=null`**，整類事件靜默消失 |
 | 廣播只是訊號、payload 放在 SharedPreferences 單一欄位 | 事件密集時後蓋前，天生掉事件 |
 | `performGlobalAction` 只檢查設定旗標、無條件回 `true` | 失敗看起來像成功 |
+| 沒人監聽時照樣處理每一筆事件 | 服務只要開著，系統就一直綁著它、行程常駐；連狀態列時鐘更新，都會在主執行緒走一次節點樹、寫一次 SharedPreferences、發一次廣播 |
+| `onStartCommand` 回 `START_STICKY` 又無條件讀 intent | 外掛用 `startService` 傳指令後，服務停在 started 狀態；行程一被殺（滑掉最近任務、記憶體回收），系統就以 null intent 重啟 → NPE，幾秒後再一次 → 「屢次停止運作」 |
 | `onServiceConnected` 對未快取的 engine 做 `requireNonNull` | 行程被服務拉起時必定 NPE → crash loop → 服務永遠連不上 |
 
 最後一項最難查：系統設定頁顯示「已啟用」，但服務從未真正連上，而 `dispatchGesture` 對此
 的處理是**靜默回 false、不留任何 log**。是在原生埋一行 log 才看出 `source=null` 與 crash
 loop 的。
+
+`onStartCommand` 那項是實際遇到的「無障礙突然失效」：`adb logcat -b crash` 留著相隔幾秒的兩次
+NPE。重現方式：`adb shell run-as com.louis.overlay_demo am startservice --user 0 -n <服務元件>`
+讓服務進入 started 狀態（不帶 `--user 0` 會被擋），再用 `run-as … kill -9` 殺掉行程。
 
 另外**新增**一項上游沒有的功能（不是缺陷）：`takeScreenshot` 直接回傳 RGBA 像素。上游只有
 `GLOBAL_ACTION_TAKE_SCREENSHOT`，檔案丟進相簿、還會跳系統截圖 UI，App 讀不回自己剛拍的
@@ -173,6 +236,11 @@ surface / 合成器那層，Dart 這側碰不到。
 左右兩側手感原本不同，也是同一個成因：展開一律把視窗錨到 (0,0)，球在左緣時 x 不用搬，
 在右緣時要橫移將近一個螢幕寬。第 3 點把兩邊拉齊。
 
+**搬視窗的動畫在 120Hz 下仍偶有不均**：吸入 X、吸邊、拖曳，都是用 `updateViewLayout` 一幀搬一次
+小視窗。錄影量到的每幀位移仍會忽大忽小（例如 84、34、52、0），推測是跨行程套用位置的時機不總是
+落在同一幀，也可能只是錄影取樣的鋸齒，**沒有分辨出是哪一個**。系統的泡泡能完全平滑，是因為它在
+大視窗裡移動 View，再用隱藏 API 限縮可觸控的區域，一般 App 用不了。
+
 **錄製的樹去重會漏收**：指紋只取 `packageName + 子節點數 + 前 8 段文字`，兩個外觀不同但
 這幾項剛好相同的畫面會被當成「樹沒變」而跳過整棵樹，只留事件本身。
 
@@ -180,8 +248,8 @@ surface / 合成器那層，Dart 這側碰不到。
 Dart 收不到通知），要到下一個動作才用上新的尺寸。
 
 **手勢導覽下，從螢幕邊緣起拖可能被系統的返回手勢搶走**：球貼邊時，觸控若落在最外側那一小段，
-系統會當成返回手勢，懸浮窗只收到取消，拖不動也不會吸邊（實測離邊 24dp 起拖時好時壞、
-42dp 正常）。從球的內側起拖即可。
+系統會當成返回手勢，懸浮窗只收到取消、球拖不動（實測離邊 24dp 起拖時好時壞、42dp 正常）。
+從球的內側起拖即可。拖到一半才被系統接走的話，取消時會照常吸回邊緣。
 
 ## 踩過的坑（都寫在 `lib/main.dart` 的註解裡）
 
