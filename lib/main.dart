@@ -789,6 +789,8 @@ class _FloatingBallState extends State<FloatingBall>
     // 所以再開一次時 initState 不會重跑，_mode 會沿用上一輪的值（關閉時若正展開著，
     // 下次開啟就會用全螢幕的排版去畫一個球大小的視窗）。OverlayService 每次
     // onStartCommand 都會送一個 appIsResumed，拿它當重新掛載的訊號重置。
+    // 光送 resumed 只有第一次收得到——LifecycleChannel 會吞掉跟上一次相同的狀態——所以原生那邊
+    // 每次顯示都先送 inactive（見 OverlayService.onStartCommand 的 LOCAL PATCH）。
     // 位置與尺寸都由原生依 showOverlay 的參數擺好，這裡不必也不該再去動。
     if (state == AppLifecycleState.resumed && mounted) {
       setState(() => _mode = _BallMode.idle);

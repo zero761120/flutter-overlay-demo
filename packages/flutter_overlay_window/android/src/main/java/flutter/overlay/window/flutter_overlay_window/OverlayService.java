@@ -93,10 +93,9 @@ public class OverlayService extends Service implements View.OnTouchListener {
     private boolean isBall = true;
     /// The app's "snap to edge" toggle (setSnapToEdge). The snap itself runs here on release.
     /// Static on purpose: every show creates a new OverlayService, while the app's toggle lives on
-    /// in the cached overlay engine, and the app has no per-show signal to re-send it on — the
-    /// overlay engine only ever receives appIsResumed, and LifecycleChannel.sendState drops a
-    /// repeated state (read from the 3.38.10 embedding), so Dart sees "resumed" once per process.
-    /// An instance field would fall back to true on every reopen with the panel still saying off.
+    /// in the cached overlay engine. An instance field would fall back to true on every reopen with
+    /// the panel still saying off; static keeps the two in step without the app having to re-send
+    /// it on every show.
     private static boolean snapToEdge = true;
     private DismissTargetView dismissView;
     /// The target is up for the current drag. Its window exists for as long as the ball's does
@@ -202,6 +201,15 @@ public class OverlayService extends Service implements View.OnTouchListener {
         isRunning = true;
         Log.d("onStartCommand", "Service started");
         FlutterEngine engine = FlutterEngineCache.getInstance().get(OverlayConstants.CACHED_TAG);
+        // LOCAL PATCH: LifecycleChannel.sendState drops a state equal to the last one it sent (read
+        // from the 3.38.10 embedding), and the cached engine only ever got appIsResumed — so Dart saw
+        // "resumed" on the first show only, never on a reopen, and its per-show reset was dead code.
+        // Measured: close the overlay from the host app while the solution card is up, reopen, and
+        // the card is drawn squeezed into the ball's window ("OVERFLOWED"). Passing through inactive
+        // makes every show a real state change. Not done as "paused" in onDestroy instead: when the
+        // overlay is shown again right after closing, that onDestroy can run after the new show (see
+        // the comment on _show in the app's main.dart), which would leave a visible overlay paused.
+        engine.getLifecycleChannel().appIsInactive();
         engine.getLifecycleChannel().appIsResumed();
         flutterView = new FlutterView(getApplicationContext(), new FlutterTextureView(getApplicationContext()));
         flutterView.attachToFlutterEngine(FlutterEngineCache.getInstance().get(OverlayConstants.CACHED_TAG));
