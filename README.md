@@ -26,6 +26,65 @@ fvm flutter pub get
 fvm flutter build apk --debug
 ```
 
+## 裝置測試腳本（`tools/device-test/`）
+
+這個 App 的行為大多要在實機上才看得到（懸浮窗、無障礙、多工畫面），所以回歸測試是一組用 adb 操作實機
+的腳本，每個情境印 PASS / FAIL。
+
+| 腳本 | 驗什麼 |
+|---|---|
+| `drag_cases.sh` | 拖進 X 被吸住、拉出後吸邊（unstick）、放手吸邊（snap）、往另一邊甩（escape）、拖進 X 放手（drop）、往 X 甩（fling）。加 `--record <目錄>` 每個情境錄一支影片 |
+| `permission_flow.sh` | 收回懸浮窗權限 → 跳到授權頁時用 `appops` 給回權限（等同打開開關）→ 返回，懸浮球要自己出現 |
+| `reopen_reset.sh` | 解答小卡、選點模式中關閉再重開，要回到球、點球要開面板 |
+| `back_to_app_recents.sh` | 「返回 App」與桌面圖示交替開，多工畫面不能多一張卡片 |
+| `track_ball.py` | 從錄影逐幀量球的位置與每幀位移，判斷動畫順不順 |
+| `count_blue.py` | 數截圖某個範圍內球的藍色像素（`reopen_reset.sh` 用來判斷畫面上畫了什麼） |
+
+前提與限制：
+
+- 手機接著、螢幕亮著且解鎖；接了多台裝置時先設 `ANDROID_SERIAL`。需要 `adb`、`ffmpeg`、`python3`
+- 手機上要裝可除錯的 debug build：關閉懸浮球、重設狀態都要用 `run-as`
+- 無障礙服務不一定要啟用：沒啟用時 `reopen_reset.sh` 按「解題」會跳出錯誤小卡，一樣是要測的小卡形態
+- **座標都是在參考機上量的**（Sony XQ-DQ72，1096×2560，顯示大小與字型縮放都是預設）。`common.sh`
+  會檢查螢幕尺寸、有沒有改過解析度或顯示大小、字型縮放，不符就中止，免得照座標點到別的東西。換手機時
+  座標不只 `common.sh` 與各腳本開頭的常數，`common.sh` 裡 `move_ball_left` 與 `drag_cases.sh` 各情境的
+  拖曳路徑與判斷範圍、`back_to_app_recents.sh` 的捲動、`track_ball.py` 的 `y_min` 都要重量
+- 每支腳本開始時都會關掉懸浮球、結束 App 的行程，讓吸附開關、連點目標等只存在記憶體裡的設定回到預設。
+  只要 adb 還連著，不管成功或中途中止，結束時都不會把展開的面板、小卡或按住的觸控留在手機上；
+  `--record` 錄到一半中止也會停掉錄影、刪掉手機上的暫存檔。成功跑完時懸浮球本身（與它的常駐通知）
+  通常會留著，以 drop 或 fling 結束的話則已經收掉
+- drop、fling 與 `back_to_app_recents.sh` 會把 App 收掉或移除卡片；`permission_flow.sh` 會暫時收回
+  懸浮窗權限，結束時恢復成測試前的值（恢復失敗會印出要手動執行的指令，並以失敗結束）
+- `back_to_app_recents.sh` 要點的「返回 App」旁邊就是「清除錄製檔」（不經確認就刪除），所以開始前會先備份
+  錄製檔，結束時有錄製檔不見了就從備份放回去。放不回去或裝置斷線時，備份會留在電腦上、印出路徑，並以
+  失敗結束
+- drop、fling 判斷「App 被收掉」時，除了懸浮窗消失、行程換掉，還要多工畫面沒有留下卡片：App 自己收掉
+  會連卡片一起移除，行程被結束則會留下卡片（用 `kill -9` 實測）。Java crash 另外從 crash 紀錄抓
+
+確認一個修正真的有效：先在修正前的版本跑一次、確認會 FAIL，再在修正後跑、確認 PASS——證明這個測試真的
+碰得到要修的地方。時機很難抓的情況（例如球飛進 X 的那約 200ms 裡按住它），可以暫時做一個把彈簧調慢的
+測試版本，讓狀態停留夠久再操作；測完一定改回來。
+
+**用 adb 操作時要注意**：起拖點要離螢幕邊至少 42dp（見「已知問題」的返回手勢）。另外，`adb shell
+input motionevent` 停住時不會像真手指一樣持續送出微小移動，而 AOSP「橫向速度太快不吸」的規則要等
+下一個移動事件才會重新判斷，所以「拖進 X 放手」會假失敗——停住後要補一個微動。
+
+其他踩過的坑：
+
+- 螢幕關著時，`adb shell input` 的點擊會全部靜默無效，不會報錯。先確認
+  `dumpsys power` 是 `mWakefulness=Awake`、`dumpsys window` 是 `isKeyguardShowing=false`
+- 球不在預期位置時，照座標點下去會點到底下的 App 或桌面。每次點之前先用 `dumpsys window windows`
+  確認懸浮窗的位置與尺寸
+- 選點模式會蓋滿全螢幕，點不到主 App 的「關閉懸浮球」。要模擬關閉，跟按鈕一樣停掉服務：
+  `adb shell run-as com.louis.overlay_demo am stopservice --user 0 -n
+  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService`。
+  不要改送 `onStartCommand` 的 `IsCloseWindow`：服務已經停了的話它會把服務拉起來，又因為沒有視窗而不會
+  自己停，常駐通知會一直掛著
+- 模擬從桌面圖示開 App 要用 `am start -a android.intent.action.MAIN -c
+  android.intent.category.LAUNCHER -f 0x10200000 -n <元件>`。只用 `am start -n` 的話 intent 跟桌面的
+  不同，多工畫面會多出一張卡片。模擬把卡片滑掉用 `am stack remove <taskId>`
+- `input motionevent` 吃小數座標，可以用來測拖曳的 sub-pixel 行為
+
 ## 拖去 X 關閉
 
 手感照系統的通知泡泡做（AOSP WM Shell 的 `DismissView` + `MagnetizedObject`）：
@@ -45,25 +104,6 @@ fvm flutter build apk --debug
 28MB PSS。
 
 系統對不可觸控的覆蓋層，強制最多 0.8 的不透明度，所以 X 的白色會略帶灰。
-
-**自動化測試時注意**：起拖點要離螢幕邊至少 42dp（見「已知問題」的返回手勢）。另外，`adb shell
-input motionevent` 停住時不會像真手指一樣持續送出微小移動，而 AOSP「橫向速度太快不吸」的規則要等
-下一個移動事件才會重新判斷，所以「拖進 X 放手」會假失敗——停住後要補一個微動。
-
-其他用 adb 測試時踩過的坑：
-
-- 螢幕關著時，`adb shell input` 的點擊會全部靜默無效，不會報錯。先確認
-  `dumpsys power` 是 `mWakefulness=Awake`、`dumpsys window` 是 `isKeyguardShowing=false`
-- 球不在預期位置時，照座標點下去會點到底下的 App 或桌面。每次點之前先用 `dumpsys window windows`
-  確認懸浮窗的位置與尺寸
-- 選點模式會蓋滿全螢幕，點不到主 App 的「關閉懸浮球」。要模擬關閉，送一個效果相同的關閉指令
-  （按鈕走的是 `closeOverlay` → `stopService`，這條走 `onStartCommand` 的 `IsCloseWindow` 分支，結果一樣）：
-  `adb shell run-as com.louis.overlay_demo am startservice --user 0 -n
-  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService --ez IsCloseWindow true`
-- 模擬從桌面圖示開 App 要用 `am start -a android.intent.action.MAIN -c
-  android.intent.category.LAUNCHER -f 0x10200000 -n <元件>`。只用 `am start -n` 的話 intent 跟桌面的
-  不同，多工畫面會多出一張卡片。模擬把卡片滑掉用 `am stack remove <taskId>`
-- `input motionevent` 吃小數座標，可以用來測拖曳的 sub-pixel 行為
 
 ## 錄製操作流程
 

@@ -29,6 +29,85 @@ fvm flutter pub get
 fvm flutter build apk --debug
 ```
 
+## Device test scripts (`tools/device-test/`)
+
+Most of what this app does only shows up on a real device (overlay windows, accessibility,
+recents), so the regression tests are a set of scripts that drive the device over adb and print
+PASS / FAIL per case.
+
+| Script | What it checks |
+|---|---|
+| `drag_cases.sh` | Sticking to the X, unsticking and snapping (unstick), snapping on release (snap), flinging to the far edge (escape), dropping on the X (drop), flinging at the X (fling). `--record <dir>` records one video per case |
+| `permission_flow.sh` | Revoke the overlay permission → once the settings page is up, grant it back with `appops` (same as flipping the switch) → Back: the overlay must appear on its own |
+| `reopen_reset.sh` | Close and reopen while the solution card / picker mode is up: it must come back as the ball, and tapping the ball must open the panel |
+| `back_to_app_recents.sh` | Mixing "back to app" and the launcher icon must not leave an extra card in recents |
+| `track_ball.py` | Tracks the ball frame by frame in a recording (position and per-frame step), to judge how smooth an animation is |
+| `count_blue.py` | Counts the ball's blue pixels in a region of a screenshot (`reopen_reset.sh` uses it to tell what is drawn) |
+
+Prerequisites and limits:
+
+- A device connected, screen on and unlocked; with several devices attached, set `ANDROID_SERIAL`
+  first. Needs `adb`, `ffmpeg` and `python3`
+- A debuggable debug build on the phone: closing the overlay and resetting state both use `run-as`
+- The accessibility service doesn't have to be enabled: without it, "Solve" in `reopen_reset.sh`
+  shows an error card, which is still the card state being tested
+- **All coordinates were measured on the reference device** (Sony XQ-DQ72, 1096×2560, default
+  display size and font scale). `common.sh` checks the screen size, any resolution or display-size
+  override, and the font scale, and stops on a mismatch rather than tapping the wrong thing. On
+  another phone, re-measure more than the constants in `common.sh` and at the top of each script:
+  the drag paths and ranges in `move_ball_left` (`common.sh`) and inside each `drag_cases.sh` case,
+  the scroll in `back_to_app_recents.sh` and `y_min` in `track_ball.py` too
+- Every script starts by closing the overlay and killing the app's process, so settings that live
+  only in memory (the snap toggle, the auto-tap target) are back at their defaults. As long as adb
+  is still connected, whether it passes or stops halfway, it never leaves the expanded panel, a
+  card or a held-down touch on the phone; stopping halfway through `--record` also stops the
+  recording and deletes the temporary file on the phone. After a successful run the ball itself
+  (and its persistent notification) usually stays up; a run that ends with drop or fling has
+  already closed it
+- drop, fling and `back_to_app_recents.sh` close the app or remove its card; `permission_flow.sh`
+  revokes the overlay permission for a moment and restores the previous value at the end (if the
+  restore fails, it prints the command to run by hand and exits with a failure)
+- The "back to app" button that `back_to_app_recents.sh` taps sits next to "clear recordings", which
+  deletes without asking, so the script backs up the recordings first and puts back any that are
+  missing at the end. If they can't be put back, or the device is gone, the backup stays on the
+  computer, its path is printed, and the script exits with a failure
+- For drop and fling, "the app was closed" means the overlay is gone, the process changed, and no
+  card is left in recents: the app closing itself removes its card, while ending the process leaves
+  it there (measured with `kill -9`). Java crashes are caught separately from the crash log
+
+To show a fix really works: run the test on the build before the fix and see it FAIL, then on the
+fixed build and see it PASS — that proves the test actually reaches what is being fixed. For
+something whose timing is hard to hit (e.g. grabbing the ball during the ~200ms it flies into the
+X), a temporary test build with a slowed-down spring keeps the state around long enough to act on
+it; always change it back afterwards.
+
+**Driving the device over adb**: start drags at least 42dp from the screen edge (see the back gesture
+under "Known issues"). Also, `adb shell input motionevent` sends nothing while "holding still",
+unlike a real finger that keeps reporting tiny moves, and AOSP's "don't stick when moving sideways
+too fast" rule is only re-evaluated on the next move event — so "drag into the X and release" can
+fail spuriously. Add one small move after the pause.
+
+Other traps hit along the way:
+
+- With the screen off, `adb shell input` taps are all silently ignored, with no error. Check first
+  that `dumpsys power` says `mWakefulness=Awake` and `dumpsys window` says
+  `isKeyguardShowing=false`
+- If the ball is not where expected, tapping by coordinates lands on the app or home screen
+  underneath. Before each tap, check the overlay window's position and size with
+  `dumpsys window windows`
+- Picker mode covers the whole screen, so the host app's "close overlay" button cannot be reached.
+  To simulate closing, stop the service as the button does:
+  `adb shell run-as com.louis.overlay_demo am stopservice --user 0 -n
+  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService`.
+  Don't send `onStartCommand`'s `IsCloseWindow` instead: if the service has already stopped, it
+  starts it again, and with no window the service never stops itself, so the persistent
+  notification stays up
+- To simulate opening the app from the launcher icon, use `am start -a android.intent.action.MAIN
+  -c android.intent.category.LAUNCHER -f 0x10200000 -n <component>`. A bare `am start -n` sends a
+  different intent and leaves an extra card in recents. To simulate swiping a card away, use
+  `am stack remove <taskId>`
+- `input motionevent` accepts fractional coordinates, which is how sub-pixel dragging can be tested
+
 ## Drag to X to close
 
 The feel follows the system's notification bubbles (AOSP WM Shell's `DismissView` +
@@ -56,31 +135,6 @@ that process has no Flutter engine and ignores every event while nobody is liste
 fixes below) — measured at about 28MB PSS.
 
 The system caps non-touchable overlays at 0.8 opacity, so the X's white reads slightly grey.
-
-**When automating tests**: start drags at least 42dp from the screen edge (see the back gesture
-under "Known issues"). Also, `adb shell input motionevent` sends nothing while "holding still",
-unlike a real finger that keeps reporting tiny moves, and AOSP's "don't stick when moving sideways
-too fast" rule is only re-evaluated on the next move event — so "drag into the X and release" can
-fail spuriously. Add one small move after the pause.
-
-Other traps hit while testing over adb:
-
-- With the screen off, `adb shell input` taps are all silently ignored, with no error. Check first
-  that `dumpsys power` says `mWakefulness=Awake` and `dumpsys window` says
-  `isKeyguardShowing=false`
-- If the ball is not where expected, tapping by coordinates lands on the app or home screen
-  underneath. Before each tap, check the overlay window's position and size with
-  `dumpsys window windows`
-- Picker mode covers the whole screen, so the host app's "close overlay" button cannot be reached.
-  To simulate closing, send an equivalent close (the button goes through `closeOverlay` →
-  `stopService`; this goes through `onStartCommand`'s `IsCloseWindow` branch, with the same result):
-  `adb shell run-as com.louis.overlay_demo am startservice --user 0 -n
-  com.louis.overlay_demo/flutter.overlay.window.flutter_overlay_window.OverlayService --ez IsCloseWindow true`
-- To simulate opening the app from the launcher icon, use `am start -a android.intent.action.MAIN
-  -c android.intent.category.LAUNCHER -f 0x10200000 -n <component>`. A bare `am start -n` sends a
-  different intent and leaves an extra card in recents. To simulate swiping a card away, use
-  `am stack remove <taskId>`
-- `input motionevent` accepts fractional coordinates, which is how sub-pixel dragging can be tested
 
 ## Recording a flow
 
