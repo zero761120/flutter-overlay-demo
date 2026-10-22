@@ -8,8 +8,10 @@
 set -u
 . "$(dirname "$0")/common.sh"
 
-# 球在左邊緣、面板捲到底時「返回 App」的位置。旁邊是「清除錄製檔」（不經確認就刪掉錄好的流程）：
-# 面板加減按鈕、改高度後一定要重量。萬一點偏，結束時會從備份把錄製檔放回去（backup_recordings）
+# 球在左邊緣、面板捲到底時「返回 App」的位置。面板加減按鈕、改高度後一定要重量。有副作用的鄰居：
+#   上一列「清除錄製檔」不經確認就刪掉錄好的流程 → 結束時會從備份放回去（backup_recordings）
+#   上兩列「錄製操作流程」會開始錄製，收尾不會停掉它；存檔時還可能因為數量上限擠掉最舊的錄製檔
+#   上四列「螢幕截圖」會存一張截圖到相簿
 BACK_TO_APP_BUTTON="347 1870"
 TMP_DIR=$(mktemp -d)
 RECORDINGS_TAR=$TMP_DIR/recordings.tar
@@ -23,8 +25,11 @@ backup_recordings() {
   local names; names=$(recording_names)
   [ -z "$names" ] && return 0
   adb exec-out "run-as $PKG sh -c 'cd app_flutter && tar cf - flow-*.json'" > "$RECORDINGS_TAR"
-  # exec-out 沒有結束碼、遠端的 stderr 也會混進來，所以確認備份裡的檔名跟手機上的一模一樣才繼續
-  [ "$(tar tf "$RECORDINGS_TAR" 2>/dev/null | LC_ALL=C sort)" = "$names" ] || die "錄製檔備份不完整，不點面板"
+  # exec-out 沒有結束碼、遠端的 stderr 也會混進來。檔名對得上還不夠：串流在最後一個檔案中間斷掉時
+  # tar tf 一樣列得出全部檔名，只有結束碼會是失敗
+  local listed
+  listed=$(tar tf "$RECORDINGS_TAR" 2>/dev/null) || die "錄製檔備份不完整，不點面板"
+  [ "$(echo "$listed" | LC_ALL=C sort)" = "$names" ] || die "錄製檔備份跟手機上的對不起來，不點面板"
   RECORDINGS_BACKED_UP=1
 }
 # 備份裡有、手機上沒有的錄製檔。比檔名不比數量：點到「錄製操作流程」存了一個新的、又因為數量上限
@@ -40,9 +45,10 @@ extra_cleanup() {
       exit 1
     fi
     if [ -n "$(missing_recordings)" ]; then
-      # 用 shell -T 而不是 exec-in：shell 協定會等遠端的 tar 跑完
-      adb shell -T "run-as $PKG sh -c 'cd app_flutter && tar xf -'" < "$RECORDINGS_TAR"
-      if [ -n "$(missing_recordings)" ]; then
+      # 用 shell -T 而不是 exec-in：shell 協定會等遠端的 tar 跑完並帶回它的結束碼。只看檔名的話，
+      # 解到一半失敗（例如空間不夠）留下的截斷檔也會被當成放回去了
+      if ! adb shell -T "run-as $PKG sh -c 'cd app_flutter && tar xf -'" < "$RECORDINGS_TAR" \
+        || [ -n "$(missing_recordings)" ]; then
         echo "!! 錄製檔放不回去；備份留在 ${RECORDINGS_TAR}（內容是錄下的操作流程，用完請刪掉）" >&2
         exit 1
       fi

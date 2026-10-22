@@ -114,7 +114,7 @@ ensure_ball() {
 # 不用 onStartCommand 的 IsCloseWindow 分支：服務已經停了的話 startservice 會把它拉起來、進前景，
 # 而那個分支在沒有視窗時不會 stopSelf，通知會一直掛著。stopservice 對沒在跑的服務什麼都不做。
 close_overlay() {
-  adb shell run-as $PKG am stopservice --user 0 -n $OVERLAY_SERVICE >/dev/null 2>&1   # 關掉了沒看懸浮窗還在不在，不看指令輸出
+  adb shell run-as $PKG am stopservice --user 0 -n $OVERLAY_SERVICE >/dev/null 2>&1   # 有沒有關掉看懸浮窗還在不在，不看指令輸出
   sleep 1.5
 }
 
@@ -165,7 +165,10 @@ cleanup() {
   if [ "$(adb get-state 2>/dev/null)" = "device" ]; then
     # 用 CANCEL 放開而不是 UP：UP 停在 X 上會把 App 收掉，CANCEL 只會收起 X、球吸邊
     [ "$TOUCH_HELD" = 1 ] && adb shell input motionevent CANCEL 547 1280
-    if [ -n "$(overlay_attrs)" ] && [ -z "$(ball_xy)" ]; then close_overlay; fi
+    if [ -n "$(overlay_attrs)" ] && [ -z "$(ball_xy)" ]; then
+      close_overlay
+      [ -z "$(overlay_attrs)" ] || echo "!! 懸浮窗關不掉，請手動關閉：$(overlay_attrs)" >&2
+    fi
   fi
   if declare -F extra_cleanup >/dev/null; then extra_cleanup; fi
 }
