@@ -206,6 +206,17 @@ public class AccessibilityListener extends AccessibilityService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // LOCAL PATCH: upstream returned START_STICKY and dereferenced the intent unconditionally.
+        // The plugin startService()s this service to deliver one-shot commands (global action,
+        // system actions, stream start), which leaves it "start-requested"; once the process dies
+        // for any reason (swiped from recents, reclaimed for memory), the system restarts a sticky
+        // service with a null intent → NPE → crash, then again a few seconds later → "keeps
+        // stopping" dialog. Measured on Android 15: two crashes 4s apart, reproduced by starting
+        // the service once and killing the process. Nothing here is worth replaying after process
+        // death — the system binding is what keeps the service alive — so don't ask to be
+        // restarted, and tolerate the null intent anyway in case a stale sticky record survives
+        // an update.
+        if (intent == null) return START_NOT_STICKY;
         boolean globalAction = intent.getBooleanExtra(INTENT_GLOBAL_ACTION, false);
         boolean systemActions = intent.getBooleanExtra(INTENT_SYSTEM_GLOBAL_ACTIONS, false);
         if (systemActions && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -219,7 +230,7 @@ public class AccessibilityListener extends AccessibilityService {
             performGlobalAction(actionId);
         }
         Log.d("CMD_STARTED", "onStartCommand: " + startId);
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
 

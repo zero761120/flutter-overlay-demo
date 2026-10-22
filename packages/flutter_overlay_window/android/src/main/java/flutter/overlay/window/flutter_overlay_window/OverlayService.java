@@ -97,6 +97,15 @@ public class OverlayService extends Service implements View.OnTouchListener {
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // LOCAL PATCH: same defect as AccessibilityListener.onStartCommand — upstream returned
+        // START_STICKY and dereferenced the intent unconditionally, so a process death while the
+        // overlay was up meant a restart with a null intent and an NPE. A restart could not bring
+        // the overlay back anyway (the position and size live in the intent that is gone), so all
+        // returns are now NOT_STICKY; the null check covers a stale sticky record.
+        if (intent == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         mResources = getApplicationContext().getResources();
         int startX = intent.getIntExtra("startX", OverlayConstants.DEFAULT_XY);
         int startY = intent.getIntExtra("startY", OverlayConstants.DEFAULT_XY);
@@ -109,7 +118,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
                 stopSelf();
             }
             isRunning = false;
-            return START_STICKY;
+            return START_NOT_STICKY;
         }
         if (windowManager != null) {
             windowManager.removeView(flutterView);
@@ -179,7 +188,7 @@ public class OverlayService extends Service implements View.OnTouchListener {
         flutterView.setOnTouchListener(this);
         windowManager.addView(flutterView, params);
         moveOverlay(dx, dy, null);
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
 
