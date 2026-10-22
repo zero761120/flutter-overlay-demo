@@ -125,18 +125,24 @@ App 的畫面文字**。這些能力本身是 Android 官方 API、用途中性�
 `packages/` 下的兩個套件是第三方程式的**修改版**，原作者 Iheb Briki，原授權 MIT，
 各自的 `LICENSE` 檔已完整保留。修改處在原始碼中以 `LOCAL PATCH` 註解標出，內容與理由
 見下一節。修正的部分都是上游的真實缺陷或沒處理到的限制；另有幾項新增功能（截圖回傳像素、
-拖去 X 關閉、原生吸邊），也標在下一節。
+拖去 X 關閉、原生吸邊、跟桌面一致的「返回 App」），也標在下一節。
 
 `flutter_accessibility_service` 的部分已回報：
 
 - [#46](https://github.com/X-SLAYER/flutter_accessibility_service/issues/46) — `onServiceConnected` 的 crash loop
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — 五個擷取缺陷，附帶兩個未主張解法的架構問題
 
-之後找到的兩項（`onStartCommand` 的 crash、沒人監聽時照樣處理事件）尚未回報。
+這個套件之後找到的兩項（`onStartCommand` 的 crash、沒人監聽時照樣處理事件）尚未回報：上面兩張到
+2026-10-22 都沒有回應，上游自 2026-06 後也沒有新的 push。
 
-`flutter_overlay_window` 的都沒報：當時上游最後一次發布是 2025-04，已停滯一年半。上游後來在
-2026-10 發布了 1.0.0／1.0.1（pub.dev 查證）；這裡仍用 0.5.0 的修改版，新版是否已修掉下面這些缺陷
-還沒比對。
+`flutter_overlay_window` 原本都沒報：當時上游最後一次發布是 2025-04，已停滯一年半。上游後來在
+2026-10 恢復更新（1.0.0／1.0.1，main 之後又合併了一批）。2026-10-22 比對 main（`e3c3549`）：
+拖曳門檻改用 touch slop、sub-pixel 拖曳、拖去 X（簡化版）、`getScreenSize`、拖完不算點擊、只在真的
+拖過才吸邊，上游已修或有對應做法；`onStartCommand` 的 crash、訊息路由、轉向後跑出畫面、重開收不到
+resumed、resize 高度判斷式則都還沒修。這裡仍用 0.5.0 的修改版。
+
+- [#205](https://github.com/X-SLAYER/flutter_overlay_window/issues/205) — `onStartCommand` 的
+  crash（先前回報的 #177／#181／#186 已被關閉，但程式碼沒改）
 
 ## 本地修正的第三方套件
 
@@ -166,6 +172,23 @@ viewport metrics 不變，callback 根本不會觸發。
 **服務被殺後以 null intent 重啟** — `onStartCommand` 回 `START_STICKY`，卻無條件讀 intent。
 懸浮窗開著時行程若被殺，系統會用 null intent 重啟服務，結果 NPE。就算重啟成功也救不回懸浮窗
 （位置與尺寸都在那個已經沒了的 intent 裡），所以全部改成 `START_NOT_STICKY`，再補上 null 防護。
+
+**新增：`openHostApp`（「返回 App」改由原生發 intent）** — 原本用 android_intent_plus 自己組，
+action 是字面的 `action_main`（外掛不會轉成 `ACTION_MAIN`），而且外掛只要指定元件就一定帶 package。
+Flutter 範本的 `taskAffinity=""` 讓最近任務只會合併「intent 完全相同（filterEquals）」的兩筆，
+跟桌面圖示的 intent 永遠不同。實測：主 App 被返回鍵關掉後（懸浮球讓行程一直活著，task 留在最近
+任務裡），桌面圖示與「返回 App」交替著開，多工畫面就出現兩張 overlay_demo 卡片（只用其中一種開
+不會）。現在照桌面的寫法發：
+`Intent.makeMainActivity(元件)`（MAIN + LAUNCHER、只帶元件不帶 package）＋ `NEW_TASK |
+RESET_TASK_IF_NEEDED`，系統會把它跟桌面開的視為同一筆、取代掉殘留的那張。android_intent_plus 因此
+不再使用、已移除。
+
+**重開懸浮球時 Dart 收不到 resumed** — 外掛每次顯示只送 `appIsResumed`，而 Flutter 的
+`LifecycleChannel` 會吞掉跟上一次相同的狀態，所以懸浮層的 Dart 只有第一次顯示時收得到 resumed。
+`main.dart` 靠它在重開時把形態重設成球，這段一直沒生效過。實測：解答小卡開著時從主 App 關閉懸浮球、
+再打開，小卡被擠在球大小的視窗裡（出現 OVERFLOWED）。現在每次顯示先送 inactive 再送 resumed。
+沒改成「關閉時送 paused」：關閉後馬上再顯示時，前一次的 onDestroy 可能晚於這次顯示才跑
+（`main.dart` 的 `_show` 註解記過這個時序），會讓顯示中的懸浮層停在 paused。
 
 **拖曳放手被當成點擊** — 視窗跟著手指移動，所以在視窗自己的座標裡，觸控點幾乎沒動，Flutter 的
 點擊容許範圍（在 Android 上就是系統的 touch slop）只有在「視窗剛好落後手指一步」的那個事件才會被

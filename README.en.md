@@ -161,7 +161,7 @@ Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Ever
 marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
 The fixes address genuine upstream defects or limitations upstream does not handle; there are
 also a few added features (a screenshot that returns pixels, drag to X to close, the native edge
-snap), likewise listed in the next section.
+snap, a "back to app" that matches the launcher), likewise listed in the next section.
 
 The `flutter_accessibility_service` ones have been reported upstream:
 
@@ -170,13 +170,21 @@ The `flutter_accessibility_service` ones have been reported upstream:
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — the five capture
   defects, plus two architectural findings where no fix is proposed
 
-The two found later (the `onStartCommand` crash, processing events with nobody listening) have not
-been reported yet.
+The two found later in this package (the `onStartCommand` crash, processing events with nobody
+listening) have not been reported: neither issue above had a reply as of 2026-10-22, and upstream
+has not pushed since 2026-06.
 
-None of the `flutter_overlay_window` ones were reported: at the time, upstream's last release was
-2025-04, a year and a half earlier. Upstream has since published 1.0.0 / 1.0.1 in 2026-10 (checked
-on pub.dev); this repo still uses its modified copy of 0.5.0, and whether the new releases fix the
-defects below has not been compared.
+None of the `flutter_overlay_window` ones were reported at first: at the time, upstream's last
+release was 2025-04, a year and a half earlier. Upstream picked up again in 2026-10 (1.0.0 / 1.0.1,
+with another batch merged on main since). Compared against main (`e3c3549`) on 2026-10-22: the touch
+slop drag threshold, sub-pixel dragging, drag to X (a simpler version), `getScreenSize`, drags no
+longer ending as taps, and snapping only after a real drag are fixed or have an equivalent upstream;
+the `onStartCommand` crash, message routing, the ball ending up off-screen after rotation, no
+"resumed" on reopen, and the resize height condition are all still unfixed. This repo still uses
+its modified copy of 0.5.0.
+
+- [#205](https://github.com/X-SLAYER/flutter_overlay_window/issues/205) — the `onStartCommand`
+  crash (the earlier reports #177 / #181 / #186 were closed, but the code was not changed)
 
 ## Locally patched third-party packages
 
@@ -214,6 +222,28 @@ since moved to native code, which reads the size itself; Dart now uses it for ex
 the system restarted the service with a null intent and it threw an NPE. A restart could not have
 brought the overlay back anyway (its position and size lived in the intent that is gone), so every
 return is now `START_NOT_STICKY`, plus a null check.
+
+**Added: `openHostApp` ("back to app" now sends its intent from native code)** — the app used to
+build the intent with android_intent_plus: the action was the literal string `action_main` (the
+plugin passes it through instead of mapping it to `ACTION_MAIN`), and the plugin always sets the
+package whenever a component is given. With the Flutter template's `taskAffinity=""`, recents only
+merges two tasks whose intents are `filterEquals`, and this one never matched the launcher's.
+Measured: once the host app was closed with Back (the overlay keeps the process alive and the task
+stays in recents), mixing the launcher icon and "back to app" left two overlay_demo cards in
+recents (using only one of them never did). It now sends what the launcher sends: `Intent.makeMainActivity(component)`
+(MAIN + LAUNCHER, component only, no package) plus `NEW_TASK | RESET_TASK_IF_NEEDED`, so the
+system treats both as the same task and replaces the stale card. android_intent_plus is no longer
+used and has been removed.
+
+**Dart never sees "resumed" when the overlay is reopened** — the plugin only ever sends
+`appIsResumed` on show, and Flutter's `LifecycleChannel` drops a state equal to the last one, so
+the overlay's Dart side only got "resumed" on the first show. `main.dart` relies on it to reset
+to the ball on reopen, and that reset never ran. Measured: close the overlay from the host app
+while the solution card is up, reopen it, and the card is drawn squeezed into the ball's window
+("OVERFLOWED"). Every show now sends inactive, then resumed. Not done as "paused" on close
+instead: when the overlay is shown again right after closing, the previous onDestroy can run after
+the new show (the comment on `_show` in `main.dart` records this ordering), which would leave a
+visible overlay paused.
 
 **A drag released as a tap** — the window follows the finger, so in the window's own coordinates
 the pointer barely moves, and Flutter's tap slop (on Android, the platform touch slop) is only
