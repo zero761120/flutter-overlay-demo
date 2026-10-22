@@ -44,6 +44,7 @@ public class FlutterOverlayWindowPlugin implements
     private BasicMessageChannel<Object> messenger;
     private Result pendingResult;
     final int REQUEST_CODE_FOR_OVERLAY_PERMISSION = 1248;
+    private ActivityPluginBinding activityBinding;
 
     @Override
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -65,14 +66,25 @@ public class FlutterOverlayWindowPlugin implements
     @RequiresApi(api = Build.VERSION_CODES.N)
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
-        pendingResult = result;
         if (call.method.equals("checkPermission")) {
             result.success(checkOverlayPermission());
         } else if (call.method.equals("requestPermission")) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // LOCAL PATCH: only this call's result is kept for onActivityResult. Upstream
+                // assigned pendingResult at the top of onMethodCall, so any other call made while the
+                // settings page was open (isOverlayActive, checkPermission…) replaced it. A request
+                // still pending is answered with the current state rather than dropped. Kept only once
+                // the settings page has actually been launched: if the launch throws (no activity, no
+                // handler for the intent), the channel answers this call with the error, and a stored
+                // result would then be answered a second time by the next request.
+                if (pendingResult != null) {
+                    pendingResult.success(checkOverlayPermission());
+                    pendingResult = null;
+                }
                 Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
                 intent.setData(Uri.parse("package:" + mActivity.getPackageName()));
                 mActivity.startActivityForResult(intent, REQUEST_CODE_FOR_OVERLAY_PERMISSION);
+                pendingResult = result;
             } else {
                 result.success(true);
             }
@@ -146,6 +158,7 @@ public class FlutterOverlayWindowPlugin implements
     @Override
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
         mActivity = binding.getActivity();
+        attachActivityResultListener(binding);
         // LOCAL PATCH: see onAttachedToEngine. Only the app's engine gets an Activity, so this
         // is the one place where we know the messenger belongs to the app and not the overlay.
         WindowSetup.messenger = messenger;
@@ -162,15 +175,35 @@ public class FlutterOverlayWindowPlugin implements
 
     @Override
     public void onDetachedFromActivityForConfigChanges() {
+        detachActivityResultListener();
     }
 
     @Override
     public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
         this.mActivity = binding.getActivity();
+        attachActivityResultListener(binding);
     }
 
     @Override
     public void onDetachedFromActivity() {
+        detachActivityResultListener();
+    }
+
+    // LOCAL PATCH: the plugin implements ActivityResultListener but upstream 0.5.0 never registered
+    // it, so onActivityResult never ran and requestPermission() never completed. Measured: with the
+    // permission revoked, "show" opened the settings page; after granting and coming back the
+    // overlay did not appear, because _show was still awaiting requestPermission(). Upstream fixed
+    // the registration on its main after 0.5.0 (#187).
+    private void attachActivityResultListener(ActivityPluginBinding binding) {
+        detachActivityResultListener();
+        activityBinding = binding;
+        binding.addActivityResultListener(this);
+    }
+
+    private void detachActivityResultListener() {
+        if (activityBinding == null) return;
+        activityBinding.removeActivityResultListener(this);
+        activityBinding = null;
     }
 
     @Override
@@ -192,7 +225,12 @@ public class FlutterOverlayWindowPlugin implements
     @Override
     public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQUEST_CODE_FOR_OVERLAY_PERMISSION) {
-            pendingResult.success(checkOverlayPermission());
+            // LOCAL PATCH: null-checked and cleared — a result with no request pending (or a second
+            // delivery) would otherwise NPE or reply twice.
+            if (pendingResult != null) {
+                pendingResult.success(checkOverlayPermission());
+                pendingResult = null;
+            }
             return true;
         }
         return false;
