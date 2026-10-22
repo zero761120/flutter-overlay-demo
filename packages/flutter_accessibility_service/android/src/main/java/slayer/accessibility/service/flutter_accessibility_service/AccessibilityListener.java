@@ -75,6 +75,20 @@ public class AccessibilityListener extends AccessibilityService {
         }
     }
 
+    /// LOCAL PATCH: number of Dart subscribers on the event stream (maintained by the plugin's
+    /// onListen / onCancel). While it is zero, events are dropped at the door.
+    ///
+    /// The system keeps this service bound — and the process alive — for as long as it is
+    /// enabled in Settings, whether or not the app is in use. Upstream processed every event
+    /// regardless: a tree walk of up to MAX_TREE_NODES on the main thread, a JSON encode, a
+    /// shared-prefs write and a broadcast, for the status-bar clock ticking over just as much as
+    /// for anything the user does. Nothing consumes that output without a subscriber: the queue
+    /// is only drained while one is attached (and cleared when the next attaches), and the node
+    /// ids that performActionById looks up only ever reach Dart through the stream.
+    /// A counter rather than a flag: the plugin is registered on more than one engine.
+    static final java.util.concurrent.atomic.AtomicInteger LISTENERS =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     /// LOCAL PATCH: "enabled in settings" and "actually bound" are different things — the
     /// service can be listed as enabled while onServiceConnected never completed. Callers
     /// need to tell those apart, otherwise a failed action looks like a successful one.
@@ -101,6 +115,7 @@ public class AccessibilityListener extends AccessibilityService {
     @RequiresApi(api = Build.VERSION_CODES.N)
     @Override
     public void onAccessibilityEvent(AccessibilityEvent accessibilityEvent) {
+        if (LISTENERS.get() == 0) return; // LOCAL PATCH: see LISTENERS
         try {
             final int eventType = accessibilityEvent.getEventType();
             AccessibilityNodeInfo parentNodeInfo = accessibilityEvent.getSource();

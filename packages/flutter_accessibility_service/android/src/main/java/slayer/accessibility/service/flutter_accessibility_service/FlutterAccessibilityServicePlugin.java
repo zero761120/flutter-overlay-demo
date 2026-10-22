@@ -220,9 +220,13 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         channel.setMethodCallHandler(null);
-        if (accessibilityReceiver != null) {
-            accessibilityReceiver.setEventSink(null);
-        }
+        // LOCAL PATCH: upstream only dropped the sink here. An engine can be destroyed while its
+        // stream is still listened to (FlutterEngine.destroy, e.g. an activity's engine when it
+        // finishes), and no onCancel comes then: the receiver stayed registered and, with
+        // AccessibilityListener.LISTENERS, the count stayed raised — the service would go on
+        // processing every event with nobody to consume it. onCancel does the full teardown.
+        // (Hot restart does not detach plugins, so it is not this path.)
+        onCancel(null);
         eventChannel.setStreamHandler(null);
         if (isReceiverRegistered) {
             context.unregisterReceiver(actionsReceiver);
@@ -252,6 +256,9 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
             intentFilter.addAction(ACCESSIBILITY_INTENT);
 
             accessibilityReceiver = new AccessibilityReceiver(events);
+            // LOCAL PATCH: see AccessibilityListener.LISTENERS. Paired with the decrement in
+            // onCancel, which is guarded on the same receiver this branch registers.
+            AccessibilityListener.LISTENERS.incrementAndGet();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 context.registerReceiver(accessibilityReceiver, intentFilter, Context.RECEIVER_EXPORTED);
             } else {
@@ -271,6 +278,7 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
             accessibilityReceiver.setEventSink(null);
             context.unregisterReceiver(accessibilityReceiver);
             accessibilityReceiver = null;
+            AccessibilityListener.LISTENERS.decrementAndGet(); // LOCAL PATCH: see onListen
         }
     }
 
