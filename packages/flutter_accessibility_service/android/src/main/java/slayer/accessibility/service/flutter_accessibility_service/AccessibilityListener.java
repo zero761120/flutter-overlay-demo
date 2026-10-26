@@ -426,7 +426,10 @@ public class AccessibilityListener extends AccessibilityService {
                 gestureBuilder.addStroke(new GestureDescription.StrokeDescription(path, startTime, duration));
             }
 
-            instance.dispatchGesture(gestureBuilder.build(), new AccessibilityService.GestureResultCallback() {
+            // LOCAL PATCH: upstream ignored this return value. When the system rejects the gesture
+            // up front (no connection to the service) it returns false and never calls the
+            // callback, so the Dart side's await never completed.
+            boolean dispatched = instance.dispatchGesture(gestureBuilder.build(), new AccessibilityService.GestureResultCallback() {
                 @Override
                 public void onCompleted(GestureDescription gestureDescription) {
                     new Handler(Looper.getMainLooper()).post(() -> result.success(true));
@@ -437,6 +440,7 @@ public class AccessibilityListener extends AccessibilityService {
                     new Handler(Looper.getMainLooper()).post(() -> result.success(false));
                 }
             }, null);
+            if (!dispatched) result.success(false);
         } catch (Exception e) {
             Log.e("GESTURE", "performDispatchGesture: " + e.getMessage());
             result.success(false);
