@@ -207,4 +207,40 @@ class AppLocalizationsZh extends AppLocalizations {
   String logSolved(int n) {
     return '解出 $n×$n 盤面';
   }
+
+  @override
+  String get fillSolution => '幫點';
+
+  @override
+  String get fillBoardChanged => '盤面跟剛才解的不一樣，請重新解題';
+
+  @override
+  String fillWrongCat(int row, int col) {
+    return '第 $row 行第 $col 列看起來有貓，但不在答案上——多半是讀錯了。確認盤面後再解一次';
+  }
+
+  @override
+  String logFilled(int n) {
+    return '幫點完成：放了 $n 隻貓';
+  }
+
+  @override
+  String logFillStopped(int n) {
+    return '幫點中途停止：懸浮球被關掉了（已放 $n 隻）';
+  }
+
+  @override
+  String fillLeftApp(int n) {
+    return '幫點中途停止：畫面換到別的 App 了（已放 $n 隻）';
+  }
+
+  @override
+  String fillCancelled(int n) {
+    return '幫點中途停止：有一下點擊被系統取消了（已放 $n 隻）。點擊進行中碰到螢幕可能會這樣；一直發生的話，到「設定 → 協助工具」把本 App 的服務關掉再開';
+  }
+
+  @override
+  String fillNoFront(int n) {
+    return '幫點停止：問不到目前前景是哪個 App，為了不點到別的地方先停下（已放 $n 隻）';
+  }
 }

@@ -20,6 +20,9 @@ class MeowdokuBoard {
     required this.top,
     required this.right,
     required this.bottom,
+    required this.rowCenters,
+    required this.colCenters,
+    required this.cats,
   });
 
   /// `regions[row][col]` 是那一格所屬的色塊編號（0 起算）。
@@ -32,6 +35,14 @@ class MeowdokuBoard {
   final int top;
   final int right;
   final int bottom;
+
+  /// 每一行／每一列格子的中心。取自投影量到的實際位置，不用邊界等分推算：間隔與格子
+  /// 寬度都是整數像素，等分的捨入誤差會一路累積到最後一格。
+  final List<int> rowCenters;
+  final List<int> colCenters;
+
+  /// `cats[row][col]`：截圖當下那一格有沒有放貓（使用者放的、或關卡送的）。
+  final List<List<bool>> cats;
 
   int get size => regions.length;
 }
@@ -150,7 +161,48 @@ MeowdokuBoard readMeowdokuBoard(
     top: top,
     right: cols.last.end,
     bottom: bottom,
+    rowCenters: <int>[for (final _Span r in rows) (r.start + r.end) ~/ 2],
+    colCenters: <int>[for (final _Span c in cols) (c.start + c.end) ~/ 2],
+    cats: <List<bool>>[
+      for (final _Span r in rows)
+        <bool>[for (final _Span c in cols) _hasCat(rgba, rowBytes, c, r)],
+    ],
   );
+}
+
+/// 照解答把盤面填完要連點兩下的格子，依行由上而下。
+///
+/// 遊戲的操作：點一下打叉、再點一下拿掉，**連點兩下**放貓——空格與打了叉的格子都是
+/// 連點兩下就變成貓（實機第 2350 關驗過），所以只要跳過已經是貓的格子。解答以外的
+/// 格子不動：叉留著無害。
+///
+/// 解答以外的格子上有貓時丟 [MeowdokuWrongCatException]：留著它盤面永遠填不完，而
+/// 點貓會變成什麼沒確認過，不替使用者拿掉。
+List<({int row, int col})> planMeowdokuFill(
+  List<List<bool>> cats,
+  List<int> solution,
+) {
+  for (int r = 0; r < cats.length; r++) {
+    for (int c = 0; c < cats[r].length; c++) {
+      if (cats[r][c] && solution[r] != c) {
+        throw MeowdokuWrongCatException(r, c);
+      }
+    }
+  }
+  return <({int row, int col})>[
+    for (int r = 0; r < solution.length; r++)
+      if (!cats[r][solution[r]]) (row: r, col: solution[r]),
+  ];
+}
+
+class MeowdokuWrongCatException implements Exception {
+  const MeowdokuWrongCatException(this.row, this.col);
+
+  final int row;
+  final int col;
+
+  @override
+  String toString() => 'MeowdokuWrongCatException($row, $col)';
 }
 
 /// 解題。最多找 [limit] 組解就停；每組是「每一行的貓放在第幾列」。
@@ -303,6 +355,33 @@ int _sampleCell(Uint8List rgba, int rowBytes, _Span col, _Span row) {
   }
   return best;
 }
+
+/// 這格有沒有貓（貓頭的樣子見 [_sampleCell]）。格子底色沒有黑（最深的深綠也有一個
+/// 通道遠高於 [_kBlackMax]），叉是白的，所以中央區域黑色夠多就是貓毛。
+bool _hasCat(Uint8List rgba, int rowBytes, _Span col, _Span row) {
+  int black = 0;
+  int total = 0;
+  for (int y = row.start + (row.length * 0.2).round();
+      y <= row.end - (row.length * 0.2).round();
+      y += 2) {
+    for (int x = col.start + (col.length * 0.2).round();
+        x <= col.end - (col.length * 0.2).round();
+        x += 2) {
+      final int i = y * rowBytes + x * 4;
+      if (rgba[i] < _kBlackMax &&
+          rgba[i + 1] < _kBlackMax &&
+          rgba[i + 2] < _kBlackMax) {
+        black++;
+      }
+      total++;
+    }
+  }
+  return black * 100 >= total * _kCatBlackPercent;
+}
+
+/// 中央六成見方裡黑色占多少百分比以上算貓。實機第 2350 關量到貓 40～41%，空格與
+/// 打叉的格子都是 0%，取遠低於貓的值。
+const int _kCatBlackPercent = 8;
 
 int _distance(int a, int b) {
   int d = 0;

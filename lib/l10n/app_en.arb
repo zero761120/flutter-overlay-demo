@@ -56,5 +56,13 @@
   "screenshotSecure": "This screen blocks screenshots",
   "screenshotUnsupported": "Requires Android 11 or later",
   "screenshotFailed": "Screenshot failed: {reason}",
-  "logSolved": "Solved a {n}×{n} board"
+  "logSolved": "Solved a {n}×{n} board",
+  "fillSolution": "Fill",
+  "fillBoardChanged": "The board differs from the one just solved; solve again",
+  "fillWrongCat": "Row {row}, column {col} looks like it has a cat, but that cell is not in the answer — most likely a misread. Check the board and solve again",
+  "logFilled": "Fill-in done: placed {n} cat(s)",
+  "logFillStopped": "Fill-in stopped midway: the floating ball was closed ({n} placed)",
+  "fillLeftApp": "Fill-in stopped midway: another app came to the front ({n} placed)",
+  "fillCancelled": "Fill-in stopped midway: the system cancelled a tap ({n} placed). Touching the screen while it taps may do this; if it keeps happening, turn this app's service off and on again in Settings → Accessibility",
+  "fillNoFront": "Fill-in stopped: couldn't tell which app is in front, so it stopped rather than tap somewhere else ({n} placed)"
 }

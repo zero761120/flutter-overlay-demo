@@ -226,6 +226,13 @@ class FlutterAccessibilityService {
     }
   }
 
+  /// LOCAL PATCH: package name of the window the user is interacting with, or null when the
+  /// service is not connected or there is no active window. The service answers synchronously
+  /// (`getRootInActiveWindow`), so this is current at the moment of the call — unlike the
+  /// window events on [accessStream], which arrive late.
+  static Future<String?> getActiveWindowPackage() =>
+      _methodChannel.invokeMethod<String>('getActiveWindowPackage');
+
   /// LOCAL PATCH: captures the default display and returns its pixels (Android 11+).
   ///
   /// Unlike the rest of this class, failures are **not** swallowed: the caller needs the

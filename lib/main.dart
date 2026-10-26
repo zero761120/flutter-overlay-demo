@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_accessibility_service/accessibility_event.dart';
@@ -69,10 +70,29 @@ const double kSolutionPadDp = 8;
 
 /// 小卡外框寬。尺寸要把它算進去：Border 會吃掉內容區，漏算就是上下各少 1dp 而 overflow。
 const double kSolutionBorderDp = 1;
-const double kSolutionHeaderDp = 20;
+const double kSolutionHeaderDp = 24;
 
 /// 解題失敗時那張小卡的尺寸（dp），只放一兩行錯誤訊息。
 const Size kSolveErrorCardDp = Size(200, 110);
+
+/// 幫點時每一下手指按住多久（ms）。
+const int kTapDurationMs = 50;
+
+/// 幫點的「連點兩下」，第一下放開到第二下按下之間隔多久（ms）。
+///
+/// 遊戲看兩下的間隔分辨單點（打叉）與連點（放貓），門檻沒量過；取 Android 預設連點
+/// 判定（ViewConfiguration 的 40～300ms）中間偏短的值。
+const int kDoubleTapGapMs = 100;
+
+/// 幫點時兩個手勢之間停多久。
+///
+/// 要明顯長過連點的判定間隔：太短的話，下一格的第一下會跟上一格的最後一下湊成連點
+/// ——上下兩行的貓最近只隔兩格，距離不一定足以讓遊戲分開判斷。400ms 在實機上跑過十幾關
+/// 都沒有湊錯；再短能短到多少沒量過。
+const Duration kFillGestureGap = Duration(milliseconds: 400);
+
+/// 幫點時一個手勢最多等多久就當作失敗（連點兩下的手勢本身是 0.2 秒）。
+const Duration kGestureTimeout = Duration(seconds: 2);
 
 /// 一套慣用的藍色主題。
 /// 主色日夜同色，底色與文字分日夜。這裡只搬懸浮球 demo 用得到的那幾個。
@@ -741,8 +761,8 @@ class _FloatingBallState extends State<FloatingBall>
   String? _lastFromApp;
   StreamSubscription<dynamic>? _sub;
 
-  /// 最近一次 MeowDoku 的盤面與答案。只留色塊編號與顏色——截圖的像素讀完就丟，
-  /// 不落檔，也不留在記憶體裡。
+  /// 最近一次 MeowDoku 的盤面與答案。只留讀出來的結果（色塊、格子位置、每格有沒有貓）
+  /// ——截圖的像素讀完就丟，不落檔，也不留在記憶體裡。
   MeowdokuBoard? _board;
   List<int>? _solution;
 
@@ -917,9 +937,25 @@ class _FloatingBallState extends State<FloatingBall>
   // ── 解 MeowDoku ──
 
   Future<void> _solveMeowdoku() async {
+    final _Solved result = await _captureAndSolve();
+    if (!mounted) return;
+    await _presentSolved(
+      result.error == null ? result.board : null,
+      result.error == null ? result.solution : null,
+      result.error,
+      result.scale,
+    );
+  }
+
+  /// 截圖、辨識、解題。解題與「幫點」共用。
+  ///
+  /// 呼叫前視窗可以是展開的面板或解答小卡，回來時一律停在 switching（什麼都不畫），
+  /// 呼叫端要負責把它換成別的形態。
+  Future<_Solved> _captureAndSolve() async {
     final AppLocalizations l10n = _l10n;
     // 面板與球都會被拍進去，而面板正好壓在盤面那個高度。展開時視窗是全螢幕、錨在
     // (0,0)，切到「什麼都不畫」就是一整片透明——直接拍，省掉先收合再拍那一輪搬移。
+    // 從解答小卡來的也一樣：小卡上畫著縮小版盤面，拍進去會被當成另一個盤面。
     setState(() => _mode = _BallMode.switching);
     await WidgetsBinding.instance.endOfFrame;
     await Future<void>.delayed(kCaptureSettleDelay);
@@ -970,21 +1006,141 @@ class _FloatingBallState extends State<FloatingBall>
         ),
       };
     } catch (e) {
-      // 其餘例外（MissingPluginException、回傳型別不符…）也一定要走到下面把視窗收掉：
-      // 停在 switching 的話，全螢幕的透明視窗會吃掉所有點擊，看起來像整台卡死。
+      // 其餘例外（MissingPluginException、回傳型別不符…）也一定要正常回傳、讓呼叫端把
+      // 視窗換掉：停在 switching 的話，全螢幕的透明視窗會吃掉所有點擊，看起來像整台卡死。
       error = l10n.screenshotFailed('$e');
     }
-    if (!mounted) return;
-    _board = error == null ? board : null;
-    _solution = error == null ? solution : null;
+    return (board: board, solution: solution, error: error, scale: scale);
+  }
+
+  /// 記下解題結果並換成小卡：[error] 有值時是錯誤小卡，否則是解答小卡。
+  Future<void> _presentSolved(
+    MeowdokuBoard? board,
+    List<int>? solution,
+    String? error,
+    double scale,
+  ) async {
+    _board = board;
+    _solution = solution;
     _solveError = error;
-    _report(error ?? l10n.logSolved(board!.size));
+    _report(error ?? _l10n.logSolved(board!.size));
     try {
       await _showSolutionCard(board, scale);
     } catch (e) {
-      // 換尺寸失敗就退回成球，理由同上。
+      // 換尺寸失敗就退回成球：停在 switching 的話，透明視窗會吃掉它底下的點擊。
       debugPrint('solution card failed: $e');
       if (mounted) await _collapse();
+    }
+  }
+
+  /// 解答小卡的「幫點」：照答案替使用者把盤面點完。
+  ///
+  /// 重拍一次而不沿用解題那張：看完答案到按下幫點之間，使用者可能已經自己點了幾格，
+  /// 每格要點幾下得看當下的盤面。順便確認還是同一盤，免得照舊答案去點新關卡。
+  Future<void> _fillMeowdoku() async {
+    final AppLocalizations l10n = _l10n;
+    final List<List<int>>? shownRegions = _board?.regions;
+    final List<int>? solution = _solution;
+    if (shownRegions == null || solution == null) return;
+    // 先切 switching 再 await，理由同 [_collapse]：等待期間小卡若還畫著、點得到，再點一下
+    // 就會疊出第二次幫點，或跟收合撞在一起。
+    setState(() => _mode = _BallMode.switching);
+    // 點擊照截圖當下的座標一路點、不再看畫面：使用者中途離開遊戲（回桌面、多工畫面、
+    // 從通知打開主 App）的話，剩下的點擊會落在別的 App 上。每一下之前都問一次前景是誰，
+    // 跟這裡記下的不同就停。不靠視窗事件：實機上事件晚到，Chrome 換到前景後還多點了兩下。
+    // 要在截圖之前問：懸浮窗不可聚焦，這時的前景一定是使用者正在看的遊戲；等收合後才問，
+    // 中間那半秒內按了 Home 的話，記下的就成了桌面，之後每一下都會比對通過。
+    final String? front = await _frontPackage();
+    final _Solved shot = await _captureAndSolve();
+    if (!mounted) return;
+    String? error = shot.error;
+    if (error == null && !_sameRegions(shot.board!.regions, shownRegions)) {
+      error = l10n.fillBoardChanged;
+    }
+    List<({int row, int col})> cells = const <({int row, int col})>[];
+    if (error == null) {
+      try {
+        cells = planMeowdokuFill(shot.board!.cats, solution);
+      } on MeowdokuWrongCatException catch (e) {
+        error = l10n.fillWrongCat(e.row + 1, e.col + 1);
+      }
+    }
+    if (error != null) {
+      await _presentSolved(null, null, error, shot.scale);
+      return;
+    }
+    final MeowdokuBoard board = shot.board!;
+    // 連點的 timer 一回到球的形態就會繼續戳它的目標，跟這裡的點擊交錯。
+    if (_clicking) _stopClicking();
+    _clickError = null;
+    await _collapse();
+    if (!mounted) return;
+    // 球收回邊緣後可能正好壓在邊排的格子上，派出去的點擊會被自己的視窗吃掉（見
+    // [_snapEnabled]）。點擊期間讓視窗不接觸控；結束一定要還原，否則球拖不動也點不開。
+    // 原生在服務已經停掉時會直接回 false，所以懸浮球中途被關掉也能放心還原。
+    await _callOverlay(
+      () => FlutterOverlayWindow.updateFlag(OverlayFlag.clickThrough),
+    );
+    int placed = 0;
+    String? stopped;
+    try {
+      for (final ({int row, int col}) cell in cells) {
+        // 同 [_startClicking]：主 App 關掉懸浮球時這裡收不到任何訊號，只能自己問。
+        if (!await FlutterOverlayWindow.isActive()) {
+          stopped = l10n.logFillStopped(placed);
+          break;
+        }
+        // 問不到（沒有作用中視窗、遊戲沒在時限內回應…）就停：剛剛才透過同一個服務截過圖，
+        // 不會是服務斷線，手勢照樣送得出去，不擋就等於防護整個關掉。
+        final String? now = await _frontPackage();
+        if (front == null || now == null) {
+          stopped = l10n.fillNoFront(placed);
+          break;
+        }
+        if (now != front) {
+          stopped = l10n.fillLeftApp(placed);
+          break;
+        }
+        // 截圖與手勢都是螢幕的實體像素，格子中心可以直接拿來點。
+        final GesturePoint p = GesturePoint(
+          board.colCenters[cell.col].toDouble(),
+          board.rowCenters[cell.row].toDouble(),
+        );
+        // 要設上限：等不到結果的話 finally 跑不到，球會一直不接觸控。外掛已補上「系統當場
+        // 拒絕」那條（LOCAL PATCH）；手勢進行中服務被關掉時回呼還來不來沒查過，這裡兜底。
+        final bool ok = await FlutterAccessibilityService.dispatchGesture(
+          doubleTapAt(p),
+        ).timeout(kGestureTimeout, onTimeout: () => false);
+        if (!ok) {
+          // 外掛把「手勢被取消」跟「服務沒連上」都回成 false，分不出來。點擊進行中使用者
+          // 碰到螢幕會取消注入中的手勢（實機：手指會；adb 注入的點擊連點 6 下都沒取消），
+          // 而服務沒連上的話前面的截圖就會失敗，所以訊息不把重開服務當第一個建議。
+          stopped = l10n.fillCancelled(placed);
+          break;
+        }
+        placed++;
+        await Future<void>.delayed(kFillGestureGap);
+      }
+    } finally {
+      await _callOverlay(
+        () => FlutterOverlayWindow.updateFlag(OverlayFlag.defaultFlag),
+      );
+    }
+    if (!mounted) return;
+    _report(stopped ?? l10n.logFilled(placed));
+    // 球已經收回去了，原因當下看不到；放進面板，下次展開時看得到。
+    if (stopped != null) setState(() => _clickError = stopped);
+  }
+
+  /// 目前前景視窗的套件名；出錯一律當成問不到（null）。不能讓例外往外丟：第一次呼叫時
+  /// 視窗停在 switching，中斷的話透明視窗會一直吃掉底下的點擊；迴圈裡的那次中斷則會漏掉
+  /// 回報。null 本來就會讓幫點停下。
+  Future<String?> _frontPackage() async {
+    try {
+      return await FlutterAccessibilityService.getActiveWindowPackage();
+    } catch (e) {
+      debugPrint('getActiveWindowPackage failed: $e');
+      return null;
     }
   }
 
@@ -1337,7 +1493,7 @@ class _FloatingBallState extends State<FloatingBall>
     }
   }
 
-  /// 解答小卡：點一下任何地方就收回成球。
+  /// 解答小卡：點一下就收回成球（「幫點」按鈕除外）。
   Widget _buildSolution() {
     final MeowdokuBoard? board = _board;
     final List<int>? solution = _solution;
@@ -1361,17 +1517,56 @@ class _FloatingBallState extends State<FloatingBall>
           children: <Widget>[
             SizedBox(
               height: kSolutionHeaderDp,
+              // 兩側用等寬的 Expanded 夾住幫點，按鈕就對整張卡置中；不用 Stack 疊，是因為
+              // 大字體時英文標題會被按鈕蓋住，Expanded 裡的標題則會截斷讓位。
               child: Row(
                 children: <Widget>[
-                  Text(
-                    error == null ? _l10n.solutionTitle : _l10n.solveFailedTitle,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Text(
+                      error == null
+                          ? _l10n.solutionTitle
+                          : _l10n.solveFailedTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                  const Spacer(),
-                  const Icon(Icons.close, size: 16),
+                  // 置中、遠離右上角的關閉圖示，免得想按幫點卻收回了小卡。
+                  // 自己的 GestureDetector 會贏過外層的「點一下收回」。
+                  if (error == null && board != null && solution != null)
+                    GestureDetector(
+                      onTap: _fillMeowdoku,
+                      child: Container(
+                        height: kSolutionHeaderDp,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          _l10n.fillSolution,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  // 沒有幫點（錯誤小卡）時不必對稱，標題拿剩下的全部寬度。
+                  if (error == null && board != null && solution != null)
+                    const Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Icon(Icons.close, size: 16),
+                      ),
+                    )
+                  else
+                    const Icon(Icons.close, size: 16),
                 ],
               ),
             ),
@@ -1715,6 +1910,34 @@ class _PanelButton extends StatelessWidget {
     return OutlinedButton(onPressed: onTap, style: style, child: Text(label));
   }
 }
+
+/// [_FloatingBallState._captureAndSolve] 的結果：[error] 有值時 [board] / [solution] 不可信。
+typedef _Solved = ({
+  MeowdokuBoard? board,
+  List<int>? solution,
+  String? error,
+  double scale,
+});
+
+bool _sameRegions(List<List<int>> a, List<List<int>> b) =>
+    a.length == b.length &&
+    <int>[for (int r = 0; r < a.length; r++) r].every(
+      (int r) => listEquals(a[r], b[r]),
+    );
+
+/// 同一個手勢裡排兩筆先後的觸控，間隔才準：分成兩次 dispatchGesture 的話，中間還隔著
+/// 一趟 channel 往返與 onCompleted 回呼，間隔會飄。
+@visibleForTesting
+GestureDescription doubleTapAt(GesturePoint p) => GestureDescription(
+  strokes: <GestureStroke>[
+    GestureStroke(path: <GesturePoint>[p], duration: kTapDurationMs),
+    GestureStroke(
+      path: <GesturePoint>[p],
+      startTime: kTapDurationMs + kDoubleTapGapMs,
+      duration: kTapDurationMs,
+    ),
+  ],
+);
 
 String _now() {
   final DateTime t = DateTime.now();

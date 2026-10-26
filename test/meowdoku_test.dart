@@ -313,5 +313,114 @@ void main() {
         ),
       );
     });
+
+    test('格子中心取實際量到的位置', () {
+      final FakeScreen screen = FakeScreen()..decorations();
+      screen.board(kEightByEight);
+      final MeowdokuBoard board = readMeowdokuBoard(
+        screen.pixels,
+        width: screen.width,
+        height: screen.height,
+        rowBytes: screen.rowBytes,
+      );
+      // 格子 80px、間隔 6px：第 i 格從 origin + i * 86 起，中心再加 (80 - 1) ~/ 2。
+      expect(board.colCenters, <int>[for (int i = 0; i < 8; i++) 20 + i * 86 + 39]);
+      expect(board.rowCenters, <int>[for (int i = 0; i < 8; i++) 420 + i * 86 + 39]);
+    });
+
+    test('認得出哪幾格有貓，打叉的不算', () {
+      final FakeScreen screen = FakeScreen()..decorations();
+      final List<List<List<int>>> corners = screen.board(kEightByEight);
+      // 每行混一點：第 r 行的第 r 格放貓、右邊兩格打叉，其餘留空。
+      for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+          final List<int> xy = corners[r][c];
+          if (c == r) {
+            screen.cat(xy[0], xy[1], 80);
+          } else if (c == r + 1 || c == r + 2) {
+            screen.cross(xy[0], xy[1], 80);
+          }
+        }
+      }
+      final MeowdokuBoard board = readMeowdokuBoard(
+        screen.pixels,
+        width: screen.width,
+        height: screen.height,
+        rowBytes: screen.rowBytes,
+      );
+      expect(board.cats, <List<bool>>[
+        for (int r = 0; r < 8; r++) <bool>[for (int c = 0; c < 8; c++) c == r],
+      ]);
+    });
+
+    test('貓的門檻：中央黑色約三成算貓、零星幾點不算', () {
+      // 實機的貓頭量到 40～41%。合成的貓頭有五成多，門檻就算被調到四成以上也測不出來，
+      // 所以另外用黑色方塊卡住兩端：取樣框是格子中央六成見方（80px 格是 48px、每 2px
+      // 取一點共 24×24 點），26px 的方塊吃到 13×13 點 ≈ 29%，8px 的方塊 4×4 點 ≈ 3%。
+      final FakeScreen screen = FakeScreen()..decorations();
+      final List<List<List<int>>> corners = screen.board(kEightByEight);
+      void square(List<int> xy, int side) {
+        final int x = xy[0] + 40 - side ~/ 2;
+        final int y = xy[1] + 40 - side ~/ 2;
+        screen.fill(x, y, x + side, y + side, <int>[30, 30, 30]);
+      }
+
+      square(corners[0][0], 26);
+      square(corners[3][5], 8);
+      final MeowdokuBoard board = readMeowdokuBoard(
+        screen.pixels,
+        width: screen.width,
+        height: screen.height,
+        rowBytes: screen.rowBytes,
+      );
+      expect(board.cats[0][0], isTrue);
+      expect(board.cats[3][5], isFalse);
+    });
+  });
+
+  group('planMeowdokuFill', () {
+    const List<int> solution = <int>[1, 3, 0, 2];
+    List<List<bool>> blank() =>
+        List<List<bool>>.generate(4, (_) => List<bool>.filled(4, false));
+
+    test('空盤面：每行的答案格都要點', () {
+      expect(planMeowdokuFill(blank(), solution), <({int row, int col})>[
+        (row: 0, col: 1),
+        (row: 1, col: 3),
+        (row: 2, col: 0),
+        (row: 3, col: 2),
+      ]);
+    });
+
+    test('已經是貓的答案格跳過', () {
+      final List<List<bool>> cats = blank();
+      cats[0][1] = true;
+      cats[3][2] = true;
+      expect(planMeowdokuFill(cats, solution), <({int row, int col})>[
+        (row: 1, col: 3),
+        (row: 2, col: 0),
+      ]);
+    });
+
+    test('全部填好了 → 沒有要點的', () {
+      final List<List<bool>> cats = blank();
+      for (int r = 0; r < 4; r++) {
+        cats[r][solution[r]] = true;
+      }
+      expect(planMeowdokuFill(cats, solution), isEmpty);
+    });
+
+    test('答案以外的格子有貓 → 丟例外並指出位置，不替使用者拿掉', () {
+      final List<List<bool>> cats = blank();
+      cats[2][3] = true;
+      expect(
+        () => planMeowdokuFill(cats, solution),
+        throwsA(
+          isA<MeowdokuWrongCatException>()
+              .having((MeowdokuWrongCatException e) => e.row, 'row', 2)
+              .having((MeowdokuWrongCatException e) => e.col, 'col', 3),
+        ),
+      );
+    });
   });
 }

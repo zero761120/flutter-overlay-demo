@@ -213,4 +213,41 @@ class AppLocalizationsEn extends AppLocalizations {
   String logSolved(int n) {
     return 'Solved a $n×$n board';
   }
+
+  @override
+  String get fillSolution => 'Fill';
+
+  @override
+  String get fillBoardChanged =>
+      'The board differs from the one just solved; solve again';
+
+  @override
+  String fillWrongCat(int row, int col) {
+    return 'Row $row, column $col looks like it has a cat, but that cell is not in the answer — most likely a misread. Check the board and solve again';
+  }
+
+  @override
+  String logFilled(int n) {
+    return 'Fill-in done: placed $n cat(s)';
+  }
+
+  @override
+  String logFillStopped(int n) {
+    return 'Fill-in stopped midway: the floating ball was closed ($n placed)';
+  }
+
+  @override
+  String fillLeftApp(int n) {
+    return 'Fill-in stopped midway: another app came to the front ($n placed)';
+  }
+
+  @override
+  String fillCancelled(int n) {
+    return 'Fill-in stopped midway: the system cancelled a tap ($n placed). Touching the screen while it taps may do this; if it keeps happening, turn this app\'s service off and on again in Settings → Accessibility';
+  }
+
+  @override
+  String fillNoFront(int n) {
+    return 'Fill-in stopped: couldn\'t tell which app is in front, so it stopped rather than tap somewhere else ($n placed)';
+  }
 }

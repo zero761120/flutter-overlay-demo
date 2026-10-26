@@ -439,6 +439,54 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'解出 {n}×{n} 盤面'**
   String logSolved(int n);
+
+  /// No description provided for @fillSolution.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點'**
+  String get fillSolution;
+
+  /// No description provided for @fillBoardChanged.
+  ///
+  /// In zh, this message translates to:
+  /// **'盤面跟剛才解的不一樣，請重新解題'**
+  String get fillBoardChanged;
+
+  /// No description provided for @fillWrongCat.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {row} 行第 {col} 列看起來有貓，但不在答案上——多半是讀錯了。確認盤面後再解一次'**
+  String fillWrongCat(int row, int col);
+
+  /// No description provided for @logFilled.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點完成：放了 {n} 隻貓'**
+  String logFilled(int n);
+
+  /// No description provided for @logFillStopped.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點中途停止：懸浮球被關掉了（已放 {n} 隻）'**
+  String logFillStopped(int n);
+
+  /// No description provided for @fillLeftApp.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點中途停止：畫面換到別的 App 了（已放 {n} 隻）'**
+  String fillLeftApp(int n);
+
+  /// No description provided for @fillCancelled.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點中途停止：有一下點擊被系統取消了（已放 {n} 隻）。點擊進行中碰到螢幕可能會這樣；一直發生的話，到「設定 → 協助工具」把本 App 的服務關掉再開'**
+  String fillCancelled(int n);
+
+  /// No description provided for @fillNoFront.
+  ///
+  /// In zh, this message translates to:
+  /// **'幫點停止：問不到目前前景是哪個 App，為了不點到別的地方先停下（已放 {n} 隻）'**
+  String fillNoFront(int n);
 }
 
 class _AppLocalizationsDelegate

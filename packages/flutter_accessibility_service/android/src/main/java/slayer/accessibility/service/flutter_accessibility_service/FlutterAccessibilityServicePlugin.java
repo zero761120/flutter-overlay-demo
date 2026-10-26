@@ -212,6 +212,9 @@ public class FlutterAccessibilityServicePlugin implements FlutterPlugin, Activit
                 return;
             }
             AccessibilityListener.performTakeScreenshot(result);
+        } else if (call.method.equals("getActiveWindowPackage")) {
+            // LOCAL PATCH: see AccessibilityListener.getActiveWindowPackage.
+            result.success(AccessibilityListener.getActiveWindowPackage());
         } else {
             result.notImplemented();
         }

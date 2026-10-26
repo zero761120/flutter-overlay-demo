@@ -399,6 +399,20 @@ public class AccessibilityListener extends AccessibilityService {
     public void onInterrupt() {
     }
 
+    /// LOCAL PATCH: upstream has no way to ask which app is in front. A caller that taps from a
+    /// stale screenshot has to stop as soon as the user leaves the app, and window-state events
+    /// on the stream come too late for that (on a device, two more taps got through after
+    /// another app came up — likely notificationTimeout coalescing plus serialising the node
+    /// tree). getRootInActiveWindow answers synchronously. Null when the service is not
+    /// connected or there is no active window.
+    public static String getActiveWindowPackage() {
+        if (instance == null) return null;
+        AccessibilityNodeInfo root = instance.getRootInActiveWindow();
+        if (root == null) return null;
+        CharSequence pkg = root.getPackageName();
+        return pkg == null ? null : pkg.toString();
+    }
+
     @SuppressWarnings("unchecked")
     @RequiresApi(api = Build.VERSION_CODES.N)
     public static void performDispatchGesture(List<Object> strokes, MethodChannel.Result result) {
