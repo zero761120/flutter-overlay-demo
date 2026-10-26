@@ -7,7 +7,7 @@ A Flutter spike for an Android floating ball (AssistiveTouch-like). Personal use
 The ball is draggable and snaps to the nearest edge on release (toggleable); while dragging, an X
 appears at the bottom — drop the ball on it (or fling it there) to close the whole app. Tapping
 the ball opens a menu with:
-set tap target, start/stop auto tap (300ms interval), screenshot, **solve MeowDoku**, **record a
+set tap target, start/stop auto tap (300ms interval), screenshot, **solve MeowDoku** (with a Fill button that taps the answer in), **record a
 flow**, clear recordings, back to app. Whatever the overlay does is reported back to the host app
 and listed
 there. Theme and locale follow the system (light/dark, Chinese/English); colors follow a blue
@@ -187,10 +187,41 @@ cells in it, so the only option is to read pixels:
    only the first solution is taken, and every one of those 42 has more than one solution
 6. The window shrinks to a small card placed right below the board (above it if there is no
    room), on the same side as the ball; it can be dragged, and a tap turns it back into the ball
+7. "Fill" at the top of the card: the board is captured again (you may have tapped a few cells
+   after reading the answer, and it confirms this is still the same board), then every answer
+   cell without a cat gets a **double tap** — in the game a single tap places an X, another tap
+   removes it, and a double tap places a cat; both empty cells and cells with an X turn straight
+   into a cat on a double tap. Cats already in place (yours, or one the level gives you) are
+   skipped, and X marks outside the answer are left alone. While tapping, the overlay window stops
+   taking touches, so a collapsed ball sitting on top of a cell does not swallow the tap; it is
+   restored afterwards. A cat outside the answer stops the fill with a message instead of being
+   removed for you — in practice the game turns a misplaced cat into a red X on the spot, so this
+   only shows up when the reader misjudges a cell. Fill first stops a running auto tap (it does
+   not resume); if another app comes to the front partway (home screen, recents, opening the host
+   app), it stops before the next tap; it also stops when it cannot tell which app is in front, or
+   when the system cancels a tap. The reason and how many cats were placed go into the host app's
+   log and show on the panel the next time it is opened. Measured: bringing Chrome to the front
+   mid-fill stopped it before the next tap, with no extra taps; a few finger taps on empty space
+   did not stop it, while tapping on the board cancelled a tap and stopped it. Presumably a finger
+   only cancels a tap if it lands while one is being sent (each tap takes 0.2s, with about 0.4s
+   between cells), so it is not a reliable way to stop. Pressing Home, opening recents and opening
+   the host app were not tested (they go through the same check as Chrome coming to the front),
+   and the "cannot tell which app is in front" path was never actually hit
 
 Verified on a real device (Android 15): a fresh 12×12 daily challenge, and level 1642 (10×10)
 played down to its last cat in both normal and pattern mode — every answer matched the in-game
 solution; the game's home screen correctly reports that no board was found.
+
+Fill (2026-10-26, same device): five regular levels — 8×8 (with a cat given by the level), 9×9
+and 10×10 — were all tapped through to the end, and clean boards were rated "not a single
+mistake"; one of them started from a half-played board (X marks, cats, an X on an answer cell)
+with the ball sitting on an answer cell. The 12×12 daily challenge was only verified up to
+reading and planning: 11 cats placed with adb at the same cell centers were all recognised and
+the plan came down to the last cell. Fill was not allowed to finish it, since finishing ends that
+day's challenge. Re-run after adding the mid-fill guard (comparing the app in front before every
+tap): one 10×10 level filled to the end; another, stopped by bringing Chrome to the front, was
+solved and filled again, skipping the 4 cats already placed; and one cancelled by a finger after
+placing 8 (plus 1 given by the level) had its last cell placed by a second fill.
 
 The reader is tuned to this game's look (light background, white gaps, flat-colored cells); a
 different theme or a different game is not guaranteed to work. When reading fails, the card says
@@ -206,6 +237,13 @@ the device with `adb shell input` + `adb exec-out screencap` avoids the problem 
 check whether the service is bound, read Bound services in `dumpsys accessibility`: the list wraps
 onto the next line, and grepping a single line misreads "bound" as "not bound".
 
+The game's own behaviour matters too: leaving the daily challenge with the top-left back button
+and coming back resets it (the timer restarts as well); it only ends once every cat is placed, and
+there is one per day. A regular level keeps its progress when you leave; only "Restart" in the
+top-right settings resets it. A misplaced cat costs one fish (three per level), which affects the
+level's rating. The system back key does nothing on the level-complete screen; to get back home,
+enter the next level and press the top-left back button there.
+
 ## Before you use it
 
 This tool requests two high-privilege permissions (overlay window, accessibility service), can
@@ -220,8 +258,8 @@ is true; recordings go to app-private internal storage rather than external; `al
 off — Auto Backup's default scope **is** internal storage, so leaving it on would close the front
 door and leave the back one open; event payloads travel through an in-process queue rather
 than a system broadcast, so no other app can passively receive them; and the solver's screenshot
-lives in memory only until the board has been read — all that is kept is the region map and its
-colors, and nothing is written to disk.
+lives in memory only until the board has been read — all that is kept is the region map, its
+colors, the cell positions and which cells hold a cat, and nothing is written to disk.
 
 The author accepts no liability for how it is used (see `LICENSE`).
 
@@ -233,8 +271,9 @@ The two packages under `packages/` are **modified copies** of third-party code, 
 Iheb Briki under the MIT license; each keeps its own `LICENSE` file intact. Every change is
 marked with a `LOCAL PATCH` comment in the source; the what and why are in the next section.
 The fixes address genuine upstream defects or limitations upstream does not handle; there are
-also a few added features (a screenshot that returns pixels, drag to X to close, the native edge
-snap, a "back to app" that matches the launcher), likewise listed in the next section.
+also a few added features (a screenshot that returns pixels, querying the window in front, drag
+to X to close, the native edge snap, a "back to app" that matches the launcher), likewise listed
+in the next section.
 
 The `flutter_accessibility_service` ones have been reported upstream:
 
@@ -243,8 +282,9 @@ The `flutter_accessibility_service` ones have been reported upstream:
 - [#47](https://github.com/X-SLAYER/flutter_accessibility_service/issues/47) — the five capture
   defects, plus two architectural findings where no fix is proposed
 
-The two found later in this package (the `onStartCommand` crash, processing events with nobody
-listening) have not been reported: neither issue above had a reply as of 2026-10-22, and upstream
+The three found later in this package (the `onStartCommand` crash, processing events with nobody
+listening, `dispatchGesture` ignoring its return value) have not been reported: neither issue
+above had a reply as of 2026-10-22, and upstream
 has not pushed since 2026-06.
 
 None of the `flutter_overlay_window` ones were reported at first: at the time, upstream's last
@@ -260,7 +300,10 @@ fixes were ported back — `requestPermission()` never completing (upstream #187
 dragging (upstream #197); see below.
 
 - [#205](https://github.com/X-SLAYER/flutter_overlay_window/issues/205) — the `onStartCommand`
-  crash (the earlier reports #177 / #181 / #186 were closed, but the code was not changed)
+  crash (the earlier reports #177 / #181 / #186 were closed, but the code was not changed). After
+  asking whether 1.0.1 had been tried, the maintainer closed it as completed on 2026-10-24, but
+  main at that point (`948b6c5`) still did not check for a null intent; a comment points out the
+  missing check, without asking for a reopen
 
 ## Locally patched third-party packages
 
@@ -367,7 +410,8 @@ to X to close"). Three implementation choices:
 
 ### `flutter_accessibility_service` (copy of 1.2.0)
 
-Eleven defects, all found by measuring on a real device:
+Twelve defects. The `dispatchGesture` one was found by a review reading the code and has not been
+reproduced on a device; all the others were found by measuring on a real device:
 
 | Defect | Consequence |
 |---|---|
@@ -381,6 +425,7 @@ Eleven defects, all found by measuring on a real device:
 | `performGlobalAction` checked only the settings flag and returned `true` unconditionally | a failed action looked like a successful one |
 | Every event processed even with nobody listening | the system keeps an enabled service bound and the process resident; even the status-bar clock updating cost a tree walk on the main thread, a shared-prefs write and a broadcast |
 | `onStartCommand` returned `START_STICKY` and read the intent unconditionally | the plugin delivers commands via `startService`, leaving the service start-requested; once the process is killed (swiped from recents, reclaimed for memory) the system restarts it with a null intent → NPE, again a few seconds later → "keeps stopping" |
+| `dispatchGesture` ignored the system's return value | when the service object still exists but its connection to the system is gone, the system returns false up front and never calls back, so the Dart side's `await` never completes (when there is no service object at all, the plugin already returns false directly — see below) |
 | `onServiceConnected` called `requireNonNull` on an uncached engine | guaranteed NPE when the process is started by the service → crash loop → the service never connects |
 
 The last one was the hardest to find: the system settings screen still lists the service as
@@ -393,12 +438,17 @@ The `onStartCommand` one is the "accessibility suddenly stopped working" that ac
 com.louis.overlay_demo am startservice --user 0 -n <service component>` puts the service in the
 started state (without `--user 0` it is refused), then kill the process with `run-as … kill -9`.
 
-One feature upstream does not have is also **added** (not a defect): `takeScreenshot`, which
-returns the RGBA pixels directly. Upstream only offers `GLOBAL_ACTION_TAKE_SCREENSHOT`, which drops
+Two features upstream does not have are also **added** (not defects). The first is
+`takeScreenshot`, which returns the RGBA pixels directly. Upstream only offers `GLOBAL_ACTION_TAKE_SCREENSHOT`, which drops
 a file into the gallery and shows the system screenshot UI, so the app cannot read back what it
 just captured. Failures are not swallowed but mapped to `NO_ACCESS` / `TOO_FREQUENT` /
 `SECURE_WINDOW` / `NOT_CONNECTED` / `UNSUPPORTED`, so the caller can say something actionable.
 The service XML has to declare `canTakeScreenshot`.
+
+The second is `getActiveWindowPackage`, which asks synchronously for the package of the window in
+front (`getRootInActiveWindow`). Fill uses it before every tap to make sure the user is still in
+the game; the window events on the stream arrive late, and on a device two more taps got through
+after Chrome came to the front — with this method, the same test let no extra tap through.
 
 ## Known issues
 
@@ -435,6 +485,18 @@ event itself.
 **Rotating while the panel is open does not re-lay it out right away**: the screen size is fetched
 at the start of each action (the overlay's Dart side gets no rotation notice), so the new size
 only takes effect on the next action.
+
+**Changing the display size (resolution / density) while the app is running misplaces the card
+and the collapsed ball**: the overlay engine has no Activity, so `display.devicePixelRatio` stays
+at its value from when the engine was created and the computed screen size in dp is wrong.
+Measured on 2026-10-26 with `wm size 720x1600` + `wm density 280`: the card went to the top of
+the screen and the collapsed ball stopped mid-screen, at positions matching the old ratio. The
+native side caches something similar: if the process starts under one density and the density is
+changed back afterwards, the ball's window has the wrong size too (cause not investigated). Fill
+taps come straight from screenshot pixels and are unaffected — that run still finished the level.
+Killing and restarting the process fixes it; a different phone does not hit this, because the
+engine is created on that phone (same test: after a restart the card, the ball and the taps were
+all correct).
 
 **With gesture navigation, a drag that starts at the screen edge can be taken by the system back
 gesture**: when the ball rests on an edge and the touch lands in the outermost strip, the system
